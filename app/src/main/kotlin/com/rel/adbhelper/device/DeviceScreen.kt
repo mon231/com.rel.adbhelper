@@ -14,7 +14,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,7 +52,7 @@ private val TABS: List<Pair<String, @Composable () -> Unit>> = listOf(
  */
 @Composable
 fun DeviceScreen(modifier: Modifier = Modifier) {
-    var selected by remember { mutableIntStateOf(0) }
+    var selected by rememberSaveable { mutableIntStateOf(0) }
 
     // Not on a configuration change (rotation, dark mode): the hub is recomposed straight away
     // and every tab needs the session still attached.
