@@ -13,8 +13,8 @@ data class FileEntry(
 
 /**
  * Parses toybox `ls -la <dir>`: perms links owner group size date time name[ -> target].
- * `total N` headers are skipped; names with spaces are re-joined; a file with no columns is
- * dropped rather than crashing the browser.
+ * `total N` headers and the `.`/`..` entries are skipped; names with spaces are re-joined; a
+ * file with no columns is dropped rather than crashing the browser.
  */
 fun parseLsLa(raw: String, dir: String): List<FileEntry> =
     raw.lines()
@@ -26,6 +26,7 @@ fun parseLsLa(raw: String, dir: String): List<FileEntry> =
             var name = cols[7]
             val isSymlink = perms.startsWith("l")
             if (isSymlink) name = name.substringBefore(" ->")
+            if (name == "." || name == "..") return@mapNotNull null
             FileEntry(
                 name = name,
                 path = "$dir/$name".replace("//", "/"),
