@@ -57,6 +57,14 @@ class AdbKeyConnectionManager private constructor(
     override fun getCertificate(): Certificate = certificate
     override fun getDeviceName(): String = "ADB Helper"
 
+    /** The identity the USB transport signs with: the same key as the network transport, so a
+     * device authorises this app once for both. */
+    fun usbIdentity(): com.rel.adbhelper.core.adb.usb.AdbIdentity =
+        com.rel.adbhelper.core.adb.usb.RsaAdbIdentity(
+            privateKey,
+            certificate.publicKey as java.security.interfaces.RSAPublicKey,
+        )
+
     /** Guards against concurrent callers racing into [connect] at once — see [ConnectGate]'s doc
      * for why that's a real, previously-live bug and not just a theoretical one. Not a plain
      * `@Synchronized`: that would be a second place a thread can get stuck forever against a
