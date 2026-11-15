@@ -236,7 +236,7 @@ private class UsbConnectFlow(
                 }
                 handedOver = true
                 UsbSessions.replace(attempt)
-                DeviceSession.attach("usb:${device.label()}", client)
+                DeviceSession.attach("usb:${device.label()}", client) { UsbSessions.replace(null) }
                 onConnected()
             } catch (e: CancellationException) {
                 if (!handedOver) attempt?.close()

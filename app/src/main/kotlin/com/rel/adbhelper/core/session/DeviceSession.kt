@@ -11,13 +11,19 @@ object DeviceSession {
     var client: AdbClient? = null
         private set
 
-    fun attach(target: String, client: AdbClient) {
+    private var onDetach: () -> Unit = {}
+
+    /** [onDetach] releases whatever the session's transport holds (the USB connection and its
+     * claimed interface); it must not block, [detach] runs on the main thread. */
+    fun attach(target: String, client: AdbClient, onDetach: () -> Unit = {}) {
         this.target = target
         this.client = client
+        this.onDetach = onDetach
     }
 
     fun detach() {
         target = null
         client = null
+        onDetach.also { onDetach = {} }()
     }
 }
