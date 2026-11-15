@@ -36,6 +36,10 @@ class FakeAdbTransport(
      * caller with no embedded completion marker of its own (unlike [runShell], which uses the
      * exit marker) must treat this specific exception as a normal end-of-stream, not a failure. */
     private val throwsStreamClosedAtEof: Boolean = false,
+    /** What `stat -c %s <path>` reports — by default the number of bytes written so far to that
+     * path's `exec:cat >` service, which is what [AdbClient.push] verifies against. Override to
+     * simulate a target that silently dropped the write. */
+    private val statOutput: String? = null,
 ) : AdbTransport {
 
     /** Bytes written to each service, for asserting push behavior. */
@@ -60,7 +64,11 @@ class FakeAdbTransport(
                 onClose = { closedServices.add(service) },
             )
         }
-        val bytes = if (omitExitMarker) {
+        val bytes = if (service.startsWith(STAT_PREFIX)) {
+            val quotedPath = service.removePrefix(STAT_PREFIX).substringBefore("; echo ")
+            val size = statOutput ?: writtenByService["exec:cat > $quotedPath"].orEmpty().sumOf { it.size }.toString()
+            "$size\n__ADBHELPER_EXIT__:0\n".toByteArray(Charsets.UTF_8)
+        } else if (omitExitMarker) {
             scriptedOutput.toByteArray(Charsets.UTF_8)
         } else {
             "${scriptedOutput}__ADBHELPER_EXIT__:$exitCode\n".toByteArray(Charsets.UTF_8)
@@ -73,6 +81,8 @@ class FakeAdbTransport(
         )
     }
 }
+
+private const val STAT_PREFIX = "shell:stat -c %s "
 
 private class InMemoryAdbStream(
     private val bytes: ByteArray,

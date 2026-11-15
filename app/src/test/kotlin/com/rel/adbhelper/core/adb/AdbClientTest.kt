@@ -207,6 +207,21 @@ class AdbClientTest {
     }
 
     @Test
+    fun `push fails when the target's file size does not match what was written`() = runTest {
+        // `cat > path` into a read-only directory fails on the target only — every write and the
+        // close on this side still succeed, so push used to report success for a file that was
+        // never written.
+        val transport = FakeAdbTransport(statOutput = "0")
+        var failure: IOException? = null
+        try {
+            client(transport).push("/system/x", byteArrayOf(1, 2, 3))
+        } catch (e: IOException) {
+            failure = e
+        }
+        assertTrue(failure != null, "expected push to throw when the target reports a different size")
+    }
+
+    @Test
     fun `push and pull shell-quote a path containing a single quote`() = runTest {
         // Unquoted, "bob's.txt" either broke the remote command or let the rest of the name run
         // as shell.

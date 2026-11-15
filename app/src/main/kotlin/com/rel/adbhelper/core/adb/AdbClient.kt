@@ -51,6 +51,11 @@ const val COMMAND_TIMEOUT_MILLIS = 15_000L
  */
 const val RAW_CHUNK_TIMEOUT_MILLIS = 2_000L
 
+/** How long [AdbClient.push] waits for the target's file size to catch up before calling the
+ * write failed — see its doc. */
+private const val PUSH_VERIFY_ATTEMPTS = 5
+private const val PUSH_VERIFY_RETRY_MILLIS = 200L
+
 /**
  * The library's stream reads/writes are raw blocking socket I/O with no timeout of their own —
  * there is no suspension point inside them for coroutine cancellation to land on, so a plain
@@ -170,6 +175,11 @@ class AdbClient(
      * transfer — a large file legitimately taking minutes isn't penalized the way one
      * whole-operation timeout would, while a connection that goes quiet mid-transfer still gets
      * caught within [COMMAND_TIMEOUT_MILLIS] of its last successful write.
+     *
+     * `cat >` reports nothing back over this stream, so a write the target refused (read-only
+     * directory, no space left) looked identical to a successful one — the file's size on the
+     * target is checked afterwards and a mismatch thrown. Retried briefly because closing the
+     * stream doesn't wait for the remote `cat` to finish flushing what it already received.
      */
     suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
         val stream = openWithTimeout("exec:cat > ${shellQuote(path)}")
@@ -184,6 +194,15 @@ class AdbClient(
             }
         } finally {
             stream.close()
+        }
+        var attempt = 1
+        while (true) {
+            val remoteSize = shell("stat -c %s ${shellQuote(path)}").outputOrThrow().trim()
+            if (remoteSize == data.size.toString()) break
+            if (attempt++ == PUSH_VERIFY_ATTEMPTS) {
+                throw IOException("wrote ${data.size} bytes but the target has $remoteSize")
+            }
+            delay(PUSH_VERIFY_RETRY_MILLIS)
         }
     } catch (c: CancellationException) {
         throw c
