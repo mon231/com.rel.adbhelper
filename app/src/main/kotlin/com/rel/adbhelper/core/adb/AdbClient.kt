@@ -170,10 +170,13 @@ class AdbClient(
     suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
         val stream = openWithTimeout("exec:cat > '$path'")
         try {
-            data.toList().chunked(chunkSize).forEach { chunk ->
+            var offset = 0
+            while (offset < data.size) {
+                val chunk = data.copyOfRange(offset, minOf(offset + chunkSize, data.size))
                 stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
-                    write(chunk.toByteArray())
+                    write(chunk)
                 }
+                offset += chunk.size
             }
         } finally {
             stream.close()

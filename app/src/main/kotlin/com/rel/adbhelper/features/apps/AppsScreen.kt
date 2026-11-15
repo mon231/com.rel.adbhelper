@@ -24,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +32,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.rel.adbhelper.core.apps.AppEntry
 import com.rel.adbhelper.core.session.DeviceSession
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AppsScreen(modifier: Modifier = Modifier) {
@@ -38,18 +42,23 @@ fun AppsScreen(modifier: Modifier = Modifier) {
     val viewModel = remember { AppsViewModel(requireNotNull(DeviceSession.client)) }
     val state by viewModel.state.collectAsState()
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    val ioScope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) { viewModel.load() }
 
     val installLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            if (bytes != null) {
-                val name = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
-                } ?: "app.apk"
-                viewModel.install(bytes, name)
+            // Off the main thread: a large APK read here froze the UI (or ANR'd) while it loaded.
+            ioScope.launch {
+                val picked = withContext(Dispatchers.IO) {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    val name = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+                    } ?: "app.apk"
+                    bytes?.let { it to name }
+                }
+                if (picked != null) viewModel.install(picked.first, picked.second)
             }
         }
     }
