@@ -27,6 +27,8 @@ class ShellViewModel(
 ) {
     data class State(
         val output: List<String> = emptyList(),
+        /** The line still being received (no newline yet), e.g. the shell prompt. */
+        val partial: String = "",
         val connected: Boolean = false,
         val message: String = "",
     )
@@ -76,16 +78,22 @@ class ShellViewModel(
                             val lastNewline = chunk.lastIndexOf('\n'.code.toByte())
                             if (lastNewline < 0) {
                                 pending.write(chunk)
+                                appendOutput(emptyList(), pending.toString(Charsets.UTF_8.name()))
                                 continue
                             }
                             pending.write(chunk, 0, lastNewline)
                             val text = pending.toString(Charsets.UTF_8.name())
                             pending.reset()
                             pending.write(chunk, lastNewline + 1, chunk.size - lastNewline - 1)
-                            appendOutput(text.split('\n').map { it.removeSuffix("\r") })
+                            // The tail is shown as it stands: a shell prompt never ends in a
+                            // newline, and holding it back would hide it until the next command.
+                            appendOutput(
+                                text.split('\n').map { it.removeSuffix("\r") },
+                                pending.toString(Charsets.UTF_8.name()),
+                            )
                         }
                         // End of stream: whatever is left is the last (unterminated) line.
-                        if (pending.size() > 0) appendOutput(listOf(pending.toString(Charsets.UTF_8.name())))
+                        if (pending.size() > 0) appendOutput(listOf(pending.toString(Charsets.UTF_8.name())), "")
                         endSession(opened)
                     } catch (c: kotlinx.coroutines.CancellationException) {
                         throw c
@@ -100,8 +108,8 @@ class ShellViewModel(
         }
     }
 
-    private fun appendOutput(lines: List<String>) {
-        _state.update { it.copy(output = (it.output + lines).takeLast(MAX_OUTPUT_ENTRIES)) }
+    private fun appendOutput(lines: List<String>, partial: String) {
+        _state.update { it.copy(output = (it.output + lines).takeLast(MAX_OUTPUT_ENTRIES), partial = partial) }
     }
 
     /** Marks the session ended, but only if [ended] is still the current one. */
@@ -129,7 +137,7 @@ class ShellViewModel(
     }
 
     fun clear() {
-        _state.update { it.copy(output = emptyList()) }
+        _state.update { it.copy(output = emptyList(), partial = "") }
     }
 
     /**
@@ -147,7 +155,7 @@ class ShellViewModel(
             old?.close()
             reader?.cancel()
             reader = null
-            _state.update { it.copy(output = emptyList(), connected = false, message = "") }
+            _state.update { it.copy(output = emptyList(), partial = "", connected = false, message = "") }
             start()
         }
     }

@@ -35,8 +35,9 @@ fun ShellScreen(modifier: Modifier = Modifier) {
     LaunchedEffect(Unit) { viewModel.start() }
     DisposableEffect(Unit) { onDispose { viewModel.close() } }
     // Keyed on the list, not its size: once the output is capped its size stops changing.
-    LaunchedEffect(state.output) {
-        if (state.output.isNotEmpty()) listState.scrollToItem(state.output.size - 1)
+    val rows = if (state.partial.isEmpty()) state.output else state.output + state.partial
+    LaunchedEffect(state.output, state.partial) {
+        if (rows.isNotEmpty()) listState.scrollToItem(rows.size - 1)
     }
 
     Column(modifier = modifier.fillMaxSize().padding(horizontal = 24.dp)) {
@@ -52,9 +53,9 @@ fun ShellScreen(modifier: Modifier = Modifier) {
             state = listState,
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp).weight(1f),
         ) {
-            items(state.output.size) { index ->
+            items(rows.size) { index ->
                 Text(
-                    state.output[index],
+                    rows[index],
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 )
             }
