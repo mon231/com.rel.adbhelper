@@ -56,4 +56,28 @@ class PowerViewModelTest {
 
         assertEquals("Command failed", vm.state.value.message)
     }
+
+    @Test
+    fun `density outside the allowed range is rejected without touching the device`() = runTest {
+        val transport = FakeAdbTransport()
+        val vm = PowerViewModel(client(transport), scope = this)
+
+        vm.setDensityInput("5")
+        vm.applyDensity()
+        advanceUntilIdle()
+
+        assertEquals("Density must be between 72 and 1000", vm.state.value.message)
+        assertEquals(null, vm.state.value.currentDensity)
+    }
+
+    @Test
+    fun `density inside the allowed range is applied`() = runTest {
+        val vm = PowerViewModel(client(FakeAdbTransport()), scope = this)
+
+        vm.setDensityInput("420")
+        vm.applyDensity()
+        advanceUntilIdle()
+
+        assertEquals("Density set to 420", vm.state.value.message)
+    }
 }

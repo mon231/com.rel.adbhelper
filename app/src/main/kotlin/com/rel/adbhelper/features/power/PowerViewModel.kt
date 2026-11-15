@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+internal const val MIN_DENSITY = 72
+internal const val MAX_DENSITY = 1000
+
 class PowerViewModel(
     private val client: AdbClient,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Unconfined),
@@ -41,6 +44,11 @@ class PowerViewModel(
 
     fun applyDensity() {
         val dpi = _state.value.densityInput.toIntOrNull() ?: return
+        // Far-out values (`wm density 5`) leave a target that cannot be operated by touch.
+        if (dpi !in MIN_DENSITY..MAX_DENSITY) {
+            _state.value = _state.value.copy(message = "Density must be between $MIN_DENSITY and $MAX_DENSITY")
+            return
+        }
         scope.launch {
             val result = client.shell(PowerCommands.setDpi(dpi))
             _state.value = _state.value.copy(
