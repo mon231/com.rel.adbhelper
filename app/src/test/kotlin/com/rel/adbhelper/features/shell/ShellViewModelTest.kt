@@ -62,7 +62,52 @@ private class SingleStreamTransport(private val stream: AdbStream) : AdbTranspor
     override suspend fun open(service: String): AdbStream = stream
 }
 
+/** Ends its read normally, but only [lateByMs] after it is closed — so the old reader finishes
+ * after restart() has already started the next session. */
+private class EndsLateOnCloseStream(private val lateByMs: Long) : AdbStream {
+    private val latch = CountDownLatch(1)
+    override suspend fun write(data: ByteArray) {}
+    override suspend fun readChunk(): ByteArray? {
+        withContext(Dispatchers.IO) {
+            latch.await()
+            Thread.sleep(lateByMs)
+        }
+        return null
+    }
+    override fun close() {
+        latch.countDown()
+    }
+}
+
+private class SequenceTransport(private val streams: List<AdbStream>) : AdbTransport {
+    private var next = 0
+    override suspend fun open(service: String): AdbStream = streams[next++]
+}
+
 class ShellViewModelTest {
+
+    @Test
+    fun `a late-finishing old reader does not orphan the restarted session`() {
+        val second = RecordingStream()
+        val vm = ShellViewModel(
+            AdbClient(SequenceTransport(listOf(EndsLateOnCloseStream(300), second)), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            closeDispatcher = Dispatchers.IO,
+        )
+        vm.start()
+        assertTrue(vm.state.value.connected)
+
+        vm.restart()
+        Thread.sleep(700)
+
+        assertTrue(vm.state.value.connected, "new session was marked ended: ${vm.state.value}")
+        assertEquals("", vm.state.value.message)
+        // The new stream is still the current one: closing the view model closes it.
+        vm.close()
+        val deadline = System.currentTimeMillis() + 2_000
+        while (second.closedOnThread == null && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertTrue(second.closedOnThread != null, "expected the new stream to still be tracked")
+    }
 
     @Test
     fun `restartAdbServer reports success when the restart drops the link`() {

@@ -32,9 +32,10 @@ class ShellViewModel(
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private var stream: AdbStream? = null
-    private var reader: Job? = null
-    private var closed = false
+    // Written from the UI thread, the open coroutine and the reader (IO); see endSession().
+    @Volatile private var stream: AdbStream? = null
+    @Volatile private var reader: Job? = null
+    @Volatile private var closed = false
 
     fun start() {
         if (stream != null) return
@@ -58,26 +59,39 @@ class ShellViewModel(
                     // right after fixing the close() main-thread crash exposed it. Cancellation
                     // (from restart's reader?.cancel()) still needs to propagate, not be
                     // swallowed here.
+                    //
+                    // The reader works on its own stream [opened], not the `stream` field: after
+                    // restart() the field holds the NEW session's stream, and the old reader
+                    // finishing late must neither clear it nor post "Shell session ended" over
+                    // the new session.
                     try {
                         while (true) {
-                            val chunk = stream?.readChunk() ?: break
+                            val chunk = opened.readChunk() ?: break
                             _state.value = _state.value.copy(
                                 output = (_state.value.output + chunk.toString(Charsets.UTF_8))
                                     .takeLast(MAX_OUTPUT_ENTRIES),
                             )
                         }
-                        _state.value = _state.value.copy(connected = false, message = "Shell session ended")
+                        endSession(opened)
                     } catch (c: kotlinx.coroutines.CancellationException) {
                         throw c
                     } catch (t: Throwable) {
-                        _state.value = _state.value.copy(connected = false, message = "Shell session ended")
+                        endSession(opened)
                     }
-                    stream = null
                 }
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(connected = false, message = "Could not open shell")
                 stream = null
             }
+        }
+    }
+
+    /** Marks the session ended, but only if [ended] is still the current one. */
+    private fun endSession(ended: AdbStream) {
+        synchronized(this) {
+            if (stream !== ended) return
+            stream = null
+            _state.value = _state.value.copy(connected = false, message = "Shell session ended")
         }
     }
 
@@ -111,8 +125,8 @@ class ShellViewModel(
      */
     fun restart() {
         scope.launch(closeDispatcher) {
-            stream?.close()
-            stream = null
+            val old = synchronized(this@ShellViewModel) { stream.also { stream = null } }
+            old?.close()
             reader?.cancel()
             reader = null
             _state.value = _state.value.copy(output = emptyList(), connected = false, message = "")
