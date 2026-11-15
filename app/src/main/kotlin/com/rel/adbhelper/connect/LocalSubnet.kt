@@ -2,7 +2,6 @@ package com.rel.adbhelper.connect
 
 import android.content.Context
 import android.net.wifi.WifiManager
-import com.rel.adbhelper.core.net.LanScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.Inet4Address
