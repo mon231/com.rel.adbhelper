@@ -110,6 +110,47 @@ class FilesViewModelTest {
     }
 
     @Test
+    fun `a failed paste keeps the clipboard so it can be retried`() = runTest {
+        val vm = FilesViewModel(client(FakeAdbTransport(scriptedOutput = "cp: Permission denied\n", exitCode = 1)), scope = this)
+        vm.copy(awkward)
+
+        vm.paste()
+        advanceUntilIdle()
+
+        assertEquals(awkward.path, vm.state.value.copiedFrom)
+    }
+
+    @Test
+    fun `uniqueFile adds a numeric suffix before the extension instead of overwriting`() {
+        val dir = kotlin.io.path.createTempDirectory().toFile()
+        try {
+            assertEquals("a.txt", uniqueFile(dir, "a.txt").name)
+            java.io.File(dir, "a.txt").writeText("x")
+            assertEquals("a (1).txt", uniqueFile(dir, "a.txt").name)
+            java.io.File(dir, "a (1).txt").writeText("x")
+            assertEquals("a (2).txt", uniqueFile(dir, "a.txt").name)
+            java.io.File(dir, "noext").writeText("x")
+            assertEquals("noext (1)", uniqueFile(dir, "noext").name)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `upload failure includes the reason`() {
+        val vm = FilesViewModel(
+            client(FakeAdbTransport(statOutput = "0")),
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.upload("/system/a.bin") { java.io.ByteArrayInputStream(byteArrayOf(1, 2, 3)) }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!vm.state.value.message.startsWith("Upload failed") && System.currentTimeMillis() < deadline) Thread.sleep(10)
+
+        assertTrue(vm.state.value.message.contains("wrote 3 bytes but the target has 0"), vm.state.value.message)
+    }
+
+    @Test
     fun `upload streams the picked file to the target`() {
         // Real dispatcher: the stream is opened and read on Dispatchers.IO, which virtual time
         // cannot advance.

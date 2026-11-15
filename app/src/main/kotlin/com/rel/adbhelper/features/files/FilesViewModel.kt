@@ -101,16 +101,18 @@ class FilesViewModel(
     }
     fun paste() {
         val from = _state.value.copiedFrom ?: return
-        runCommand("cp -r ${shellQuote(from)} ${shellQuote(_state.value.path)}", "Pasted")
-        _state.update { it.copy(copiedFrom = null) }
+        // Only a copy that worked uses the clipboard up; after a failure it can be retried.
+        runCommand("cp -r ${shellQuote(from)} ${shellQuote(_state.value.path)}", "Pasted") {
+            _state.update { it.copy(copiedFrom = null) }
+        }
     }
 
-    /** [open] supplies the picked file's stream (null when it cannot be read); it is opened and
+    /** [openInput] supplies the picked file's stream (null when it cannot be read); it is opened and
      * read on [Dispatchers.IO] and streamed to the target, never loaded into memory whole. */
-    fun upload(path: String, open: () -> InputStream?) {
+    fun upload(path: String, openInput: () -> InputStream?) {
         scope.launch {
             try {
-                val input = withContext(Dispatchers.IO) { open() }
+                val input = withContext(Dispatchers.IO) { openInput() }
                 if (input == null) {
                     _state.update { it.copy(message = "Could not read the selected file") }
                     return@launch
@@ -119,7 +121,7 @@ class FilesViewModel(
                 _state.update { it.copy(message = "Uploaded ${path.substringAfterLast('/')}") }
                 open(_state.value.path)
             } catch (t: Throwable) {
-                _state.update { it.copy(message = "Upload failed") }
+                _state.update { it.copy(message = "Upload failed: ${t.describe()}") }
             }
         }
     }
@@ -127,7 +129,7 @@ class FilesViewModel(
     fun download(entry: FileEntry, saveContext: android.content.Context) {
         scope.launch {
             val dir = saveContext.getExternalFilesDir("Downloads") ?: saveContext.filesDir
-            val file = java.io.File(dir, entry.name)
+            val file = uniqueFile(dir, entry.name)
             try {
                 // Streams chunk-by-chunk straight to disk — entry.size can be arbitrarily large
                 // (a video, an APK), so never buffer the whole file in memory first.
@@ -137,18 +139,19 @@ class FilesViewModel(
                 _state.update { it.copy(message = "Downloaded to ${file.absolutePath}") }
             } catch (t: Throwable) {
                 file.delete()
-                _state.update { it.copy(message = "Download failed") }
+                _state.update { it.copy(message = "Download failed: ${t.describe()}") }
             }
         }
     }
 
     private fun join(name: String) = "${_state.value.path.trimEnd('/')}/$name"
 
-    private fun runCommand(command: String, successMessage: String) {
+    private fun runCommand(command: String, successMessage: String, onSuccess: () -> Unit = {}) {
         scope.launch {
             try {
                 val result = client.shell(command)
                 if (result is com.rel.adbhelper.core.adb.AdbResult.Success) {
+                    onSuccess()
                     _state.update { it.copy(message = successMessage) }
                 } else {
                     _state.update { it.copy(message = "Command failed") }
@@ -163,4 +166,21 @@ class FilesViewModel(
     companion object {
         const val DEFAULT_ROOT = "/sdcard"
     }
+}
+
+/** The failure's own message plus its cause's: [AdbClient]'s wrappers say what was being done
+ * ("failed to write to /x"), the cause says why. */
+private fun Throwable.describe(): String =
+    listOfNotNull(message, cause?.message).distinct().joinToString(": ").ifEmpty { "unknown error" }
+
+/** [name] in [dir], or `name (1).ext`, `name (2).ext`, ... when that file already exists, so a
+ * download never silently overwrites an earlier one. */
+internal fun uniqueFile(dir: java.io.File, name: String): java.io.File {
+    var candidate = java.io.File(dir, name)
+    if (!candidate.exists()) return candidate
+    val stem = name.substringBeforeLast('.', name)
+    val ext = name.substring(stem.length)
+    var n = 1
+    while (candidate.exists()) candidate = java.io.File(dir, "$stem ($n)$ext").also { n++ }
+    return candidate
 }
