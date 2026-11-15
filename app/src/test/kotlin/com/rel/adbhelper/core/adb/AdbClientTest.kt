@@ -188,6 +188,18 @@ class AdbClientTest {
     }
 
     @Test
+    fun `push and pull shell-quote a path containing a single quote`() = runTest {
+        // Unquoted, "bob's.txt" either broke the remote command or let the rest of the name run
+        // as shell.
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/bob'\\''s.txt'" to byteArrayOf(7)))
+        assertEquals(listOf<Byte>(7), client(transport).pull("/sdcard/bob's.txt").toList())
+
+        val pushTransport = FakeAdbTransport()
+        client(pushTransport).push("/sdcard/bob's.txt", byteArrayOf(1, 2))
+        assertEquals(setOf("exec:cat > '/sdcard/bob'\\''s.txt'"), pushTransport.writtenByService.keys)
+    }
+
+    @Test
     fun `pull returns the streamed bytes for the requested path`() = runTest {
         val payload = "file content".toByteArray()
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/a.txt'" to payload))

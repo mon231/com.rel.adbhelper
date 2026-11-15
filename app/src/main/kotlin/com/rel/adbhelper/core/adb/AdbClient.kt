@@ -1,5 +1,6 @@
 package com.rel.adbhelper.core.adb
 
+import com.rel.adbhelper.core.shell.shellQuote
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -168,7 +169,7 @@ class AdbClient(
      * caught within [COMMAND_TIMEOUT_MILLIS] of its last successful write.
      */
     suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
-        val stream = openWithTimeout("exec:cat > '$path'")
+        val stream = openWithTimeout("exec:cat > ${shellQuote(path)}")
         try {
             var offset = 0
             while (offset < data.size) {
@@ -194,7 +195,7 @@ class AdbClient(
      */
     suspend fun pullTo(path: String, sink: (ByteArray) -> Unit) {
         try {
-            val stream = openWithTimeout("exec:cat '$path'")
+            val stream = openWithTimeout("exec:cat ${shellQuote(path)}")
             try {
                 while (true) {
                     val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
