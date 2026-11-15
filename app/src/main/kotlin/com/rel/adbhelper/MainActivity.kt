@@ -7,7 +7,10 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import com.rel.adbhelper.navigation.AppNavHost
 import com.rel.adbhelper.ui.theme.AdbHelperTheme
 
@@ -22,6 +25,8 @@ class MainActivity : ComponentActivity() {
         // over the dark UI in night mode.
         enableEdgeToEdge()
         setContent {
+            // App is always left-to-right, even on RTL (e.g. Hebrew) devices.
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
             AdbHelperTheme {
                 // targetSdk 36 enforces edge-to-edge by default: content draws under the
                 // system bars unless it explicitly insets itself, which previously left
@@ -30,6 +35,7 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     AppNavHost(modifier = Modifier.safeDrawingPadding())
                 }
+            }
             }
         }
     }
