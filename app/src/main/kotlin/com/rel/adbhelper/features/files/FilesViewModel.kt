@@ -28,14 +28,17 @@ class FilesViewModel(
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
-    fun open(path: String) {
+    /** [link]: the symlink being followed, if any — when it turns out not to lead to a
+     * directory, its info dialog is shown instead of a listing error. */
+    fun open(path: String, link: FileEntry? = null) {
         scope.launch {
             _state.value = _state.value.copy(loading = true, message = "")
             try {
                 // `ls -la <dir>` on a symlink lists the link itself, so always list with a
-                // trailing slash to follow it (e.g. /sdcard -> /storage/self/primary).
-                val dir = path.trimEnd('/')
-                val raw = client.shell("ls -la ${shellQuote("$dir/")}").let { result ->
+                // trailing slash to follow it (e.g. /sdcard -> /storage/self/primary). The root
+                // stays "/" rather than trimming down to "".
+                val dir = path.trimEnd('/').ifEmpty { "/" }
+                val raw = client.shell("ls -la ${shellQuote("${dir.trimEnd('/')}/")}").let { result ->
                     if (result is com.rel.adbhelper.core.adb.AdbResult.Success) result.output else null
                 } ?: throw IllegalStateException("ls failed")
                 _state.value = _state.value.copy(
@@ -44,10 +47,14 @@ class FilesViewModel(
                     loading = false,
                 )
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(
-                    loading = false,
-                    message = "Failed to list ${path}: ${t.message ?: "unknown error"}",
-                )
+                _state.value = if (link != null) {
+                    _state.value.copy(loading = false, selectedForInfo = link)
+                } else {
+                    _state.value.copy(
+                        loading = false,
+                        message = "Failed to list ${path}: ${t.message ?: "unknown error"}",
+                    )
+                }
             }
         }
     }
@@ -63,8 +70,10 @@ class FilesViewModel(
     }
 
     fun entryClick(entry: FileEntry) {
-        if (entry.isSymlink && !entry.isDir) {
-            _state.value = _state.value.copy(selectedForInfo = entry)
+        if (entry.isSymlink) {
+            // A link's own perms never say whether it leads to a directory (/sdcard does), so
+            // just try to list it.
+            open(entry.path, link = entry)
         } else if (entry.isDir) {
             open(entry.path)
         } else {
