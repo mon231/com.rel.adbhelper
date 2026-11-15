@@ -82,7 +82,9 @@ jobs:
           trap 'rm -f "$keystore" "$RUNNER_TEMP/aligned.apk"' EXIT
           printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$keystore"
           zipalign -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
-          apksigner sign --ks "$keystore" --ks-key-alias "$SIGNING_KEY_ALIAS"             --ks-pass env:SIGNING_KEYSTORE_PASSWORD --key-pass env:SIGNING_KEY_PASSWORD             --out "adbhelper-${GITHUB_REF_NAME}.apk" "$RUNNER_TEMP/aligned.apk"
+          apksigner sign --ks "$keystore" --ks-key-alias "$SIGNING_KEY_ALIAS" \
+            --ks-pass env:SIGNING_KEYSTORE_PASSWORD --key-pass env:SIGNING_KEY_PASSWORD \
+            --out "adbhelper-${GITHUB_REF_NAME}.apk" "$RUNNER_TEMP/aligned.apk"
           apksigner verify --verbose "adbhelper-${GITHUB_REF_NAME}.apk"
 
       - uses: actions/upload-artifact@v4

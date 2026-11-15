@@ -45,7 +45,8 @@ workflow falls back to the debug-key-signed APK (pull requests from forks have n
 Creating a keystore and encoding it:
 
 ```bash
-keytool -genkeypair -v -keystore adbhelper.jks -alias adbhelper   -keyalg RSA -keysize 4096 -validity 10000
+keytool -genkeypair -v -keystore adbhelper.jks -alias adbhelper \
+  -keyalg RSA -keysize 4096 -validity 10000
 base64 -w0 adbhelper.jks   # paste the output into SIGNING_KEYSTORE_BASE64
 ```
 

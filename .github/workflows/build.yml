@@ -30,7 +30,8 @@ jobs:
         run: |
           set -euo pipefail
           built=$(ls app/build/outputs/apk/debug/*.apk)
-          if [ -z "$SIGNING_KEYSTORE_BASE64" ] || [ -z "$SIGNING_KEYSTORE_PASSWORD" ]             || [ -z "$SIGNING_KEY_ALIAS" ] || [ -z "$SIGNING_KEY_PASSWORD" ]; then
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ] || [ -z "$SIGNING_KEYSTORE_PASSWORD" ] \
+            || [ -z "$SIGNING_KEY_ALIAS" ] || [ -z "$SIGNING_KEY_PASSWORD" ]; then
             echo "::notice::Signing secrets not available: uploading the debug-key-signed APK as-is."
             cp "$built" adbhelper-signed.apk
             exit 0
@@ -40,7 +41,9 @@ jobs:
           trap 'rm -f "$keystore" "$RUNNER_TEMP/aligned.apk"' EXIT
           printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$keystore"
           zipalign -f -p 4 "$built" "$RUNNER_TEMP/aligned.apk"
-          apksigner sign --ks "$keystore" --ks-key-alias "$SIGNING_KEY_ALIAS"             --ks-pass env:SIGNING_KEYSTORE_PASSWORD --key-pass env:SIGNING_KEY_PASSWORD             --out adbhelper-signed.apk "$RUNNER_TEMP/aligned.apk"
+          apksigner sign --ks "$keystore" --ks-key-alias "$SIGNING_KEY_ALIAS" \
+            --ks-pass env:SIGNING_KEYSTORE_PASSWORD --key-pass env:SIGNING_KEY_PASSWORD \
+            --out adbhelper-signed.apk "$RUNNER_TEMP/aligned.apk"
           apksigner verify --verbose adbhelper-signed.apk
 
       - uses: actions/upload-artifact@v4
