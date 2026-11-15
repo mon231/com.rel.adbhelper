@@ -5,7 +5,6 @@ import com.rel.adbhelper.core.adb.AdbResult
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.apps.AppDetails
 import com.rel.adbhelper.core.apps.AppEntry
-import com.rel.adbhelper.core.apps.classifyApps
 import com.rel.adbhelper.core.apps.parseDumpsysPackage
 import com.rel.adbhelper.core.apps.parsePmList
 import com.rel.adbhelper.core.shell.shellQuote

@@ -1,7 +1,6 @@
 package com.rel.adbhelper.core.apps
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class AppParsersTest {
@@ -14,10 +13,6 @@ package:com.android.systemui
 package:com.keshet.mako.VOD
     """.trimIndent()
 
-    private val thirdPartyFixture = """
-package:com.tranzmate
-package:com.didjdk.adbhelper
-    """.trimIndent()
 
     private val dumpsysFixture = """
     versionCode=37 minSdk=37 targetSdk=37
@@ -40,16 +35,6 @@ package:com.didjdk.adbhelper
         )
     }
 
-    @Test
-    fun `classifyApps flags system apps by set membership`() {
-        val apps = classifyApps(
-            parsePmList(pmFixture),
-            parsePmList(thirdPartyFixture).toSet(),
-        )
-        assertEquals(5, apps.size)
-        assertTrue(apps.first { it.pkg == "com.android.systemui" }.isSystem)
-        assertTrue(apps.first { it.pkg == "com.tranzmate" }.let { !it.isSystem })
-    }
 
     @Test
     fun `parseDumpsysPackage reads version sdk times and requested permissions`() {

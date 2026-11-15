@@ -22,7 +22,6 @@ private class RecordingStream(private val writeFailure: Throwable? = null) : Adb
     override suspend fun write(data: ByteArray) {
         writeFailure?.let { throw it }
     }
-    override suspend fun readAll(): ByteArray = ByteArray(0)
 
     // Never resolves on its own — a real terminal session's reader loop sits here until the
     // stream is closed out from under it. If this returned immediately instead, the shell
@@ -50,7 +49,6 @@ private class RecordingTransport(val stream: RecordingStream) : AdbTransport {
 private class ThrowsOnForceCloseStream : AdbStream {
     private val latch = CountDownLatch(1)
     override suspend fun write(data: ByteArray) {}
-    override suspend fun readAll(): ByteArray = ByteArray(0)
     override suspend fun readChunk(): ByteArray? {
         withContext(Dispatchers.IO) { latch.await() }
         throw IOException("Stream closed.")

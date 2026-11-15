@@ -59,8 +59,8 @@ private const val PUSH_VERIFY_RETRY_MILLIS = 200L
 /**
  * The library's stream reads/writes are raw blocking socket I/O with no timeout of their own —
  * there is no suspension point inside them for coroutine cancellation to land on, so a plain
- * `withTimeout` wrapped around a call to [AdbStream.readAll]/[AdbStream.readChunk]/[AdbStream.write]
- * cannot actually interrupt it: it marks the coroutine cancelled, but the blocked thread only
+ * `withTimeout` wrapped around a call to [AdbStream.readChunk]/[AdbStream.write] cannot actually
+ * interrupt it: it marks the coroutine cancelled, but the blocked thread only
  * notices once the blocking call itself returns, which on a dead link is never. Closing the
  * stream from a separate watchdog coroutine is what actually unblocks it — the underlying socket
  * throws on the blocked thread once it's closed out from under it (true on Android/Linux, which
@@ -135,7 +135,7 @@ class AdbClient(
 
     /**
      * Reads a raw service's full byte output — no shell exit-marker framing. Reads chunk-by-chunk
-     * rather than via [AdbStream.readAll] so a confirmed library bug (see [runShell]'s doc) has
+     * rather than in one read-to-EOF call so a confirmed library bug (see [runShell]'s doc) has
      * only two failure modes left to handle here, both live-reproduced capturing screenshots on
      * the Live Screen tab: when the remote CLSE packet races an already-drained read queue,
      * [AdbStream.read] throws `IOException("Stream closed.")` instead of signaling EOF the normal
@@ -256,7 +256,7 @@ class AdbClient(
 
     /**
      * Reads chunk-by-chunk, stopping as soon as the embedded exit marker is seen in the
-     * accumulated output, rather than waiting for [AdbStream.readAll]'s EOF. Live-reproduced,
+     * accumulated output, rather than waiting for the stream's own EOF. Live-reproduced,
      * decompiled-bytecode-confirmed bug in the underlying ADB protocol library
      * (`io.github.muntashirakon:libadb-android` 3.1.1): when the remote CLSE packet races the
      * last queued WRTE, [AdbStream.read] can block forever instead of ever signaling EOF — the

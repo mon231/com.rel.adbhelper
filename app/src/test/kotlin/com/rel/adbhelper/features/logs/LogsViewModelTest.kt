@@ -37,7 +37,6 @@ private class ScriptedStream : AdbStream {
     fun fail(error: Throwable) = queue.put(error)
 
     override suspend fun write(data: ByteArray) {}
-    override suspend fun readAll(): ByteArray = ByteArray(0)
     override suspend fun readChunk(): ByteArray? {
         readsInFlight.incrementAndGet()
         readsStarted.incrementAndGet()

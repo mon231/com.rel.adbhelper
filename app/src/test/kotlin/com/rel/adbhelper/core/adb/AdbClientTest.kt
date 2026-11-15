@@ -33,7 +33,7 @@ class AdbClientTest {
         // forever instead of ever returning EOF, when the remote CLSE packet arrives while data
         // is still queued — the final queued chunk gets drained through a fast path that never
         // promotes the stream to a real "closed" state, so a later read() call blocks on a wait()
-        // nothing will ever wake. Depending on readAll() (which needs a real EOF) to know a
+        // nothing will ever wake. Depending on reading to a real EOF to know a
         // one-shot shell command is done is therefore unsafe — every call we already embed our
         // own exit marker specifically so we don't have to trust the stream's own completion
         // signal at all.
@@ -275,11 +275,6 @@ class AdbClientTest {
             val transport = object : AdbTransport {
                 override suspend fun open(service: String): AdbStream = object : AdbStream {
                     override suspend fun write(data: ByteArray) {}
-                    override suspend fun readAll(): ByteArray =
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            latch.await() // blocks the real thread; only close() below releases it
-                            ByteArray(0)
-                        }
                     override suspend fun readChunk(): ByteArray? =
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             latch.await() // blocks the real thread; only close() below releases it
@@ -328,11 +323,6 @@ class AdbClientTest {
             val transport = object : AdbTransport {
                 override suspend fun open(service: String): AdbStream = object : AdbStream {
                     override suspend fun write(data: ByteArray) {}
-                    override suspend fun readAll(): ByteArray =
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            latch.await()
-                            ByteArray(0)
-                        }
                     override suspend fun readChunk(): ByteArray? =
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             latch.await()

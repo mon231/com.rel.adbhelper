@@ -28,7 +28,7 @@ class FakeAdbTransport(
      * stop reading once it has recognized the command's own embedded exit marker, not wait for
      * the stream's own (sometimes-never-arriving) EOF. */
     private val neverSignalsEof: Boolean = false,
-    /** Once all scripted bytes are delivered, [AdbStream.readChunk]/[AdbStream.readAll] throw
+    /** Once all scripted bytes are delivered, [AdbStream.readChunk] throws
      * `IOException("Stream closed.")` immediately instead of returning null — reproduces the
      * OTHER half of the same confirmed library bug: when CLSE arrives on an already-empty
      * queue, `AdbStream.read` throws this exact exception rather than returning -1. Both signal
@@ -99,15 +99,7 @@ private class InMemoryAdbStream(
 ) : AdbStream {
     private var readPosition = 0
     override suspend fun write(data: ByteArray) = onWrite(data)
-    override suspend fun readAll(): ByteArray {
-        throwOnRead?.let { throw it }
-        if (hangLatch != null) {
-            withContext(Dispatchers.IO) { hangLatch.await() }
-            throw java.io.IOException("Stream closed.")
-        }
-        if (throwsStreamClosedAtEof) throw java.io.IOException("Stream closed.")
-        return bytes
-    }
+
     override suspend fun readChunk(): ByteArray? {
         throwOnRead?.let { throw it }
         if (readPosition >= bytes.size) {

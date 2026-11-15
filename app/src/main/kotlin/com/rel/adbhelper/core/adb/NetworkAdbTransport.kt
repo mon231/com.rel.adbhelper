@@ -40,9 +40,6 @@ private class LibraryAdbStream(private val delegate: io.github.muntashirakon.adb
         delegate.openOutputStream().write(data)
     }
 
-    override suspend fun readAll(): ByteArray = withContext(Dispatchers.IO) {
-        input.readBytes()
-    }
 
     override suspend fun readChunk(): ByteArray? = withContext(Dispatchers.IO) {
         val buffer = ByteArray(READ_CHUNK_SIZE)
