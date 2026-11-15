@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -29,8 +30,8 @@ class AppsViewModelTest {
         // against a real target: firing these three shell() calls at once over this app's one
         // shared multiplexed connection intermittently force-closed the two larger reads (system
         // and disabled, each 200+ packages) while the smallest (third-party) finished first — the
-        // app silently showed an empty list with no error, since the failure was swallowed by
-        // .success().orEmpty(). Same class of bug streamOpenMutex's own doc already covers for
+        // app silently showed an empty list with no error, since the failure was swallowed
+        // instead of thrown. Same class of bug streamOpenMutex's own doc already covers for
         // concurrent opens, just resurfacing for concurrent reads on one connection instead.
         // Each of the three calls takes 1s on this (simulated) link — sequential, the whole load
         // should take ~3s, not ~1s.
@@ -45,6 +46,18 @@ class AppsViewModelTest {
             "expected the three fetches to run one after another (~3s), took ${testScheduler.currentTime}ms " +
                 "— running them concurrently reintroduces a live-reproduced connection-corruption bug",
         )
+        assertTrue(!vm.state.value.loading, "expected load() to finish, got ${vm.state.value}")
+    }
+
+    @Test
+    fun `load shows an error when the device is unreachable, not an empty app list`() = runTest {
+        val transport = FakeAdbTransport(throwOnOpen = java.io.IOException("refused"))
+        val vm = AppsViewModel(client(transport), scope = this)
+
+        vm.load()
+        advanceUntilIdle()
+
+        assertEquals("Connection to the device was lost", vm.state.value.message)
         assertTrue(!vm.state.value.loading, "expected load() to finish, got ${vm.state.value}")
     }
 

@@ -2,6 +2,7 @@ package com.rel.adbhelper.features.apps
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.apps.AppDetails
 import com.rel.adbhelper.core.apps.AppEntry
 import com.rel.adbhelper.core.apps.classifyApps
@@ -41,20 +42,24 @@ class AppsViewModel(
                 // over this app's one shared multiplexed connection intermittently force-closed
                 // the two larger reads (system/disabled, each listing 200+ packages) while the
                 // tiny third-party read finished first, surfacing as a silent empty app list (no
-                // error shown, since the failure was swallowed by .success().orEmpty()). Same
+                // error shown, since the failure was swallowed instead of thrown — hence
+                // outputOrThrow() below, so a failed read reaches the catch). Same
                 // underlying class of bug streamOpenMutex's doc already covers for concurrent
                 // opens — here it's concurrent reads racing on one connection instead. Each read
                 // is still individually fast; the cost of going sequential is one extra round
                 // trip, not three stacked full timeouts.
-                val thirdParty = parsePmList(client.shell("pm list packages -3").success().orEmpty())
-                val system = parsePmList(client.shell("pm list packages -s").success().orEmpty())
-                val disabled = parsePmList(client.shell("pm list packages -d").success().orEmpty()).toSet()
+                val thirdParty = parsePmList(client.shell("pm list packages -3").outputOrThrow())
+                val system = parsePmList(client.shell("pm list packages -s").outputOrThrow())
+                val disabled = parsePmList(client.shell("pm list packages -d").outputOrThrow()).toSet()
                 val apps = (thirdParty + system)
                     .map { AppEntry(pkg = it, isSystem = it !in thirdParty.toSet(), isEnabled = it !in disabled) }
                     .sortedBy { it.pkg }
                 _state.value = _state.value.copy(loading = false, apps = apps)
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(loading = false, message = "Connection to the device was lost")
+                _state.value = _state.value.copy(
+                    loading = false,
+                    message = t.message ?: "Connection to the device was lost",
+                )
             }
         }
     }
@@ -66,10 +71,10 @@ class AppsViewModel(
     fun details(entry: AppEntry) {
         scope.launch {
             try {
-                val raw = client.shell("dumpsys package ${shellQuote(entry.pkg)}").success().orEmpty()
+                val raw = client.shell("dumpsys package ${shellQuote(entry.pkg)}").outputOrThrow()
                 _state.value = _state.value.copy(details = entry to parseDumpsysPackage(raw))
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Failed to read app details")
+                _state.value = _state.value.copy(message = t.message ?: "Failed to read app details")
             }
         }
     }
@@ -143,7 +148,6 @@ class AppsViewModel(
         }
     }
 
-    private fun AdbResult.success(): String? = (this as? AdbResult.Success)?.output
 
     private companion object {
         const val INSTALL_TIMEOUT_MILLIS = 5 * 60_000L
