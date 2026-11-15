@@ -145,7 +145,7 @@ fun ConnectScreen(
                     scanning = true
                     scanResults = emptyList()
                     val subnet = localSubnet(context.applicationContext)
-                    val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet.first, subnet.second)
+                    val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet)
                     verifyScanCandidates(
                         candidates = candidates,
                         concurrency = SCAN_VERIFY_CONCURRENCY,
