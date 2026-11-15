@@ -246,31 +246,14 @@ fun ConnectScreen(
         PairDialog(onDismiss = { pairDialog = false })
     }
     if (usbDialog) {
-        UsbNotImplementedDialog(onDismiss = { usbDialog = false })
+        UsbConnectDialog(
+            onConnected = {
+                usbDialog = false
+                onConnected()
+            },
+            onDismiss = { usbDialog = false },
+        )
     }
-}
-
-/**
- * USB-OTG has no ADB transport behind it yet: `libadb-android` 3.1.1 (the only version
- * published) only implements the network/TLS transport, and a USB ADB client means hand-rolling
- * the AUTH/CNXN/OPEN/WRTE/CLSE wire protocol over raw `UsbManager`/`UsbDeviceConnection` bulk
- * transfer — out of scope for this pass (user decision: stub this visibly rather than build it
- * or hide it). This dialog is that stub, so the USB-OTG entry point is honest about its state
- * instead of silently missing from the UI.
- */
-@Composable
-private fun UsbNotImplementedDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("USB-OTG") },
-        text = {
-            Text(
-                "USB-OTG connections aren't implemented yet. Connect over Wi-Fi/network instead, " +
-                    "using the address field, Scan, or Pair above.",
-            )
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
-    )
 }
 
 @Composable
