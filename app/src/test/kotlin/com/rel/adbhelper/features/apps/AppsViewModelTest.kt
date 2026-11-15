@@ -83,6 +83,24 @@ class AppsViewModelTest {
     }
 
     @Test
+    fun `install failure shows pm's reason and the next action clears it`() {
+        val vm = AppsViewModel(
+            client(FakeAdbTransport(scriptedOutput = "Failure [INSTALL_FAILED_VERSION_DOWNGRADE]\n", exitCode = 1)),
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.install("app.apk") { java.io.ByteArrayInputStream(byteArrayOf(1)) }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!vm.state.value.busy.startsWith("Install failed") && System.currentTimeMillis() < deadline) Thread.sleep(10)
+
+        assertEquals("Install failed: Failure [INSTALL_FAILED_VERSION_DOWNGRADE]", vm.state.value.busy.trim())
+
+        vm.clearCache(com.rel.adbhelper.core.apps.AppEntry(pkg = "a.b", isSystem = false, isEnabled = true))
+
+        assertEquals("", vm.state.value.busy)
+    }
+
+    @Test
     fun `install streams the apk to the target and runs pm install`() {
         val transport = FakeAdbTransport()
         val vm = AppsViewModel(client(transport), scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined))

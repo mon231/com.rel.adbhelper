@@ -99,6 +99,7 @@ class AppsViewModel(
     /** Root-gated "activate" flow: grant the app shell-level secure-settings permissions. */
     fun activate(entry: AppEntry) {
         scope.launch {
+            _state.update { it.copy(busy = "") }
             val root = client.shell("su -c id") is AdbResult.Success
             if (!root) {
                 _state.update { it.copy(
@@ -127,18 +128,24 @@ class AppsViewModel(
                 // longer than the default per-read timeout.
                 val result = client.shell("pm install -r ${shellQuote(tempPath)}", timeoutMillis = INSTALL_TIMEOUT_MILLIS)
                 client.shell("rm ${shellQuote(tempPath)}")
-                _state.update { it.copy(
-                    busy = if (result is AdbResult.Success) "Installed $name" else "Install failed",
-                ) }
+                // pm's own reason (INSTALL_FAILED_VERSION_DOWNGRADE, ...) is what the user needs.
+                val outcome = when (result) {
+                    is AdbResult.Success -> "Installed $name"
+                    is AdbResult.CommandFailed -> "Install failed: ${result.message}"
+                    is AdbResult.TransportUnreachable -> "Install failed: connection to the device was lost"
+                }
+                _state.update { it.copy(busy = outcome) }
                 load()
             } catch (t: Throwable) {
-                _state.update { it.copy(busy = "Install failed") }
+                _state.update { it.copy(busy = "Install failed: ${t.message ?: "unknown error"}") }
             }
         }
     }
 
     private fun run(command: String, successMessage: String) {
         scope.launch {
+            // The previous install's result is stale once another action starts.
+            _state.update { it.copy(busy = "") }
             try {
                 val result = client.shell(command)
                 _state.update { it.copy(
