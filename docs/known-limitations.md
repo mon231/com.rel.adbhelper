@@ -2,20 +2,25 @@
 
 ## USB-OTG transport
 
-Not implemented. The original app connects over USB-OTG as well as Wi-Fi; this rewrite
-currently only supports network targets.
+Implemented, but not yet verified on hardware. The ADB library this project uses
+([`libadb-android`](https://github.com/MuntashirAkon/libadb-android) 3.1.1) has no USB transport,
+so the app carries its own implementation of the ADB wire protocol for USB (see
+[Architecture](architecture.md)).
 
-The dependency this project uses for the ADB protocol itself,
-[`libadb-android`](https://github.com/MuntashirAkon/libadb-android) (latest published version:
-3.1.1), only implements the TCP/TLS transport — there is no USB transport in any version of
-that library. Supporting USB-OTG here means implementing the ADB wire protocol's handshake
-(`AUTH`/`CNXN`) and framing (`OPEN`/`WRTE`/`OKAY`/`CLSE`) directly over raw
-`UsbManager`/`UsbDeviceConnection` bulk-transfer endpoints — a substantial undertaking in its
-own right, not a small addition on top of the existing network path.
+What is tested: the protocol layer (handshake, key authorisation, stream multiplexing, flow
+control, failure handling) runs in unit tests against a simulated device, including a full
+command round trip through the same client the network path uses.
 
-The **USB-OTG** button on the Connect screen is a visible placeholder: it opens a dialog
-explaining that USB isn't supported yet, rather than silently doing nothing or being absent
-from the UI. Use a network connection (address entry, Scan, or Pair) in the meantime.
+What is not: the part that talks to real USB hardware, the Android permission prompt, and
+interoperability with a real device's `adbd`. Until that has been confirmed, expect rough edges:
+
+- The controlling phone must support USB host mode (OTG).
+- A target that is already in a USB debugging session with a computer cannot be shared.
+- Some devices may reject the handshake's checksum mode; the fix is known but not applied
+  because it has not been observed.
+- One device at a time; plugging a device in does not open the app.
+- If a command stalls, the whole USB connection is dropped and re-established on the next
+  command, which also ends anything else running over it (a shell, logs, mirroring).
 
 ## Screen mirroring (scrcpy)
 

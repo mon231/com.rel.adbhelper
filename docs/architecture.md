@@ -11,7 +11,7 @@
 
 ## Transport
 
-The ADB wire protocol itself isn't hand-rolled. `core/adb` wraps
+For network targets the ADB wire protocol isn't hand-rolled. `core/adb` wraps
 [`io.github.muntashirakon:libadb-android`](https://github.com/MuntashirAkon/libadb-android), an
 actively maintained open-source ADB client library, behind a small `AdbTransport` interface:
 
@@ -22,7 +22,14 @@ actively maintained open-source ADB client library, behind a small `AdbTransport
   (`shell`, `raw`, `push`, `pull`, `openService`) that every feature's `ViewModel` calls into —
   everything above this line is transport-agnostic.
 
-A USB-OTG transport is **not** implemented — see [Known limitations](known-limitations.md).
+- `UsbAdbTransport` (`core/adb/usb`) — the library has no USB transport, so this one speaks the
+  ADB wire protocol itself: `AdbMessage` (24-byte header codec, `CNXN`/`AUTH`/`OPEN`/`OKAY`/
+  `WRTE`/`CLSE`), `AdbConnection` (handshake, one reader thread, multiplexed streams with `OKAY`
+  flow control) and `RsaAdbIdentity` (token signing and adb's public-key format), over an
+  `AdbPacketChannel`. `UsbPacketChannel` is the only Android-specific part: bulk transfers on the
+  device's ADB interface. It uses the same RSA key as the network transport, so a target
+  authorises the app once. Everything except `UsbPacketChannel` is unit-tested against a
+  scripted in-memory peer.
 
 ## Session
 

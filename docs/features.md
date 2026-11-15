@@ -2,18 +2,28 @@
 
 ## Connect
 
-Two ways to reach a target over the network:
+Over the network:
 
 - **Address** — type `ip:port` directly and tap **Connect**.
-- **Scan** — sweeps the local subnet for hosts with the ADB port open, then verifies each
-  candidate with a real handshake before listing it. Shows "Scanning for devices on the local
-  network…" while running, "No adb devices found" if nothing turns up.
+- **Scan** — sweeps the local subnet for hosts with ADB port 5555 open and verifies each with a
+  real handshake. At the same time it listens for wireless-debugging targets announced over mDNS
+  (these use a random port, so the sweep alone cannot find them); those are listed as announced,
+  without the handshake check. Shows "Scanning for devices on the local network…" while running,
+  "No adb devices found" if nothing turns up.
 - **Pair** — wireless debugging's pairing flow: enter the target's pairing `ip:port` and
-  6-digit code; shows "Pairing…", then "Pairing succeeded" or "Pairing failed".
+  6-digit code; shows "Pairing…", then "Pairing succeeded" or "Pairing failed". The address is
+  filled in automatically when exactly one device on the network is offering pairing.
 
-Recent connections are remembered and listed for one-tap reconnect, each removable.
+Recent network connections are listed newest first (up to 10) for one-tap reconnect, each
+removable.
 
-USB-OTG is a stub for now — see [Known limitations](known-limitations.md).
+Over a cable:
+
+- **USB-OTG** — lists attached devices that expose a USB debugging interface, asks Android for
+  permission to use the one you pick, then connects. The first time, the target shows its "Allow
+  USB debugging?" prompt and the app waits ("Waiting for authorisation on the device…") until you
+  accept it there; **Cancel** stops waiting. See [Known limitations](known-limitations.md) for
+  what has and has not been verified on hardware.
 
 ## Device info
 

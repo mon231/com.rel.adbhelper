@@ -15,8 +15,7 @@ upstream libraries/binaries, never from the original project's own source tree.
 
 ## Documentation
 
-Full docs — features, architecture, build instructions, and known gaps (USB-OTG, screen
-mirroring) — live under [`docs/`](docs/index.md), built with
+Full docs — features, architecture, build instructions, and known limitations — live under [`docs/`](docs/index.md), built with
 [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/):
 
 ```bash
@@ -27,11 +26,11 @@ mkdocs serve
 ## Requirements
 
 - Android Studio / JDK 17+, Android SDK (minSdk 26).
-- A target device or emulator reachable over the network for local testing. USB-OTG isn't
-  implemented yet — see [Known limitations](docs/known-limitations.md).
+- A target device or emulator reachable over the network, or attached by an OTG cable, for
+  local testing. USB-OTG and screen mirroring have not been verified on hardware yet — see
+  [Known limitations](docs/known-limitations.md).
 
 ## License
 
-Not yet decided for this fork; the bundled third-party components (AOSP `adb`/`fastboot`,
-Genymobile `scrcpy-server`) retain their own upstream licenses — see the in-app "About" screen
-once implemented.
+Not yet decided for this fork. The bundled Genymobile `scrcpy-server` (Apache-2.0) keeps its
+upstream license — see [Third-party notices](docs/third-party.md).
