@@ -14,3 +14,16 @@ fun AdbResult.outputOrThrow(): String = when (this) {
     is AdbResult.CommandFailed -> throw java.io.IOException(message)
     is AdbResult.TransportUnreachable -> throw java.io.IOException("Connection to the device was lost", cause)
 }
+
+/**
+ * True when the target itself rejected the command (non-zero exit, e.g. permission denied) —
+ * as opposed to the link dropping before any exit status arrived, which is what a command that
+ * cuts the connection (reboot, restarting adbd) looks like when it works. [AdbClient.shell]
+ * reports that second case either as [AdbResult.TransportUnreachable] or as a
+ * [AdbResult.CommandFailed] carrying [NO_EXIT_STATUS].
+ */
+internal fun AdbResult.isRejection(): Boolean = this is AdbResult.CommandFailed && message != NO_EXIT_STATUS
+
+/** [AdbResult.CommandFailed]'s message for a shell stream that ended without the exit marker;
+ * [AdbClient] produces it and [isRejection] recognises it (pinned by `PowerViewModelTest`). */
+internal const val NO_EXIT_STATUS = "remote shell closed without an exit status"

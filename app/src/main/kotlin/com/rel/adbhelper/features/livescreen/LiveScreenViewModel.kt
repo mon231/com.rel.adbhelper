@@ -1,7 +1,7 @@
 package com.rel.adbhelper.features.livescreen
 
 import com.rel.adbhelper.core.adb.AdbClient
-import com.rel.adbhelper.features.deviceinfo.isCompletePng
+import com.rel.adbhelper.core.image.isCompletePng
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

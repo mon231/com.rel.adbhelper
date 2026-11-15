@@ -2,6 +2,7 @@ package com.rel.adbhelper.features.power
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.isRejection
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.power.PowerCommands
 import kotlinx.coroutines.CoroutineScope
@@ -92,16 +93,3 @@ class PowerViewModel(
     fun disableWirelessDebugging() =
         run(PowerCommands.disableWirelessDebugging(), "Wireless debugging disabled", cutsLink = true)
 }
-
-/**
- * True when the target itself rejected the command (non-zero exit, e.g. permission denied) —
- * as opposed to the link dropping before any exit status arrived, which is what a command that
- * cuts the connection (reboot, restarting adbd) looks like when it works. [AdbClient.shell]
- * reports that second case either as [AdbResult.TransportUnreachable] or as a
- * [AdbResult.CommandFailed] carrying [NO_EXIT_STATUS].
- */
-internal fun AdbResult.isRejection(): Boolean = this is AdbResult.CommandFailed && message != NO_EXIT_STATUS
-
-/** Must match [AdbClient]'s message for a shell stream that ended without the exit marker
- * (pinned by `PowerViewModelTest`). */
-private const val NO_EXIT_STATUS = "remote shell closed without an exit status"

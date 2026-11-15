@@ -2,7 +2,7 @@ package com.rel.adbhelper.features.shell
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbStream
-import com.rel.adbhelper.features.power.isRejection
+import com.rel.adbhelper.core.adb.isRejection
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

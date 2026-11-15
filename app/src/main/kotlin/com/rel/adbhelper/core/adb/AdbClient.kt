@@ -303,7 +303,7 @@ class AdbClient(
             while (true) {
                 val chunk = stream.timingOutOnClose(timeoutMillis, watchdogDispatcher, transport::invalidate) {
                     readChunk()
-                } ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
+                } ?: return AdbResult.CommandFailed(NO_EXIT_STATUS)
                 buffer.write(chunk)
                 tail = (tail + chunk.copyOfRange(maxOf(0, chunk.size - EXIT_MARKER_TAIL_BYTES), chunk.size))
                     .let { it.copyOfRange(maxOf(0, it.size - EXIT_MARKER_TAIL_BYTES), it.size) }
