@@ -13,8 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
-/** Newest chunks kept in [ShellViewModel.State.output]; older ones are dropped so a chatty
+/** Newest lines kept in [ShellViewModel.State.output]; older ones are dropped so a chatty
  * command (`logcat`) cannot grow the list, which is copied on every chunk, without bound. */
 internal const val MAX_OUTPUT_ENTRIES = 2000
 
@@ -66,13 +67,25 @@ class ShellViewModel(
                     // finishing late must neither clear it nor post "Shell session ended" over
                     // the new session.
                     try {
+                        // A chunk boundary can fall inside a line, so only whole lines become
+                        // rows; the unfinished tail waits here for the next chunk (bytes, not
+                        // text, so a split multi-byte character survives).
+                        val pending = ByteArrayOutputStream()
                         while (true) {
                             val chunk = opened.readChunk() ?: break
-                            _state.update { it.copy(
-                                output = (it.output + chunk.toString(Charsets.UTF_8))
-                                    .takeLast(MAX_OUTPUT_ENTRIES),
-                            ) }
+                            val lastNewline = chunk.lastIndexOf('\n'.code.toByte())
+                            if (lastNewline < 0) {
+                                pending.write(chunk)
+                                continue
+                            }
+                            pending.write(chunk, 0, lastNewline)
+                            val text = pending.toString(Charsets.UTF_8.name())
+                            pending.reset()
+                            pending.write(chunk, lastNewline + 1, chunk.size - lastNewline - 1)
+                            appendOutput(text.split('\n').map { it.removeSuffix("\r") })
                         }
+                        // End of stream: whatever is left is the last (unterminated) line.
+                        if (pending.size() > 0) appendOutput(listOf(pending.toString(Charsets.UTF_8.name())))
                         endSession(opened)
                     } catch (c: kotlinx.coroutines.CancellationException) {
                         throw c
@@ -85,6 +98,10 @@ class ShellViewModel(
                 stream = null
             }
         }
+    }
+
+    private fun appendOutput(lines: List<String>) {
+        _state.update { it.copy(output = (it.output + lines).takeLast(MAX_OUTPUT_ENTRIES)) }
     }
 
     /** Marks the session ended, but only if [ended] is still the current one. */

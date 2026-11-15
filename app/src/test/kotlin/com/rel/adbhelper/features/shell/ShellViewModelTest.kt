@@ -138,9 +138,9 @@ class ShellViewModelTest {
 
     @Test
     fun `output keeps only the newest entries`() {
-        // One byte per chunk: five more chunks than the cap, then the stream ends.
+        // Five more lines than the cap, one byte per chunk, then the stream ends.
         val transport = FakeAdbTransport(
-            scriptedOutput = "a".repeat(MAX_OUTPUT_ENTRIES) + "bbbbb",
+            scriptedOutput = "a\n".repeat(MAX_OUTPUT_ENTRIES) + "b\n".repeat(5),
             omitExitMarker = true,
             chunkSize = 1,
         )
@@ -154,6 +154,23 @@ class ShellViewModelTest {
         val output = vm.state.value.output
         assertEquals(MAX_OUTPUT_ENTRIES, output.size)
         assertEquals(listOf("b", "b", "b", "b", "b"), output.takeLast(5))
+    }
+
+    @Test
+    fun `a line split across chunks is one row and a trailing partial line is flushed at the end`() {
+        val transport = FakeAdbTransport(
+            scriptedOutput = "hello world\r\nsecond\nthird",
+            omitExitMarker = true,
+            chunkSize = 4,
+        )
+        val vm = ShellViewModel(
+            AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.start()
+
+        assertEquals(listOf("hello world", "second", "third"), vm.state.value.output)
     }
 
     @Test
