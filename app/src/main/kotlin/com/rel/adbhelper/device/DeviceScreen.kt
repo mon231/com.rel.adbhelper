@@ -1,11 +1,8 @@
 package com.rel.adbhelper.device
 
 import androidx.activity.compose.LocalActivity
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -16,7 +13,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +22,7 @@ import com.rel.adbhelper.features.deviceinfo.InfoScreen
 import com.rel.adbhelper.features.files.FilesScreen
 import com.rel.adbhelper.features.livescreen.LiveScreenScreen
 import com.rel.adbhelper.features.logs.LogsScreen
+import com.rel.adbhelper.features.mirror.MirrorScreen
 import com.rel.adbhelper.features.power.PowerScreen
 import com.rel.adbhelper.features.processes.ProcessListScreen
 import com.rel.adbhelper.features.shell.ShellScreen
@@ -74,22 +71,5 @@ fun DeviceScreen(modifier: Modifier = Modifier) {
         // key: each tab gets its own composition, so one tab's remembered state is never reused
         // by another and leaving a tab disposes it.
         key(selected) { TABS[selected].second() }
-    }
-}
-
-/**
- * scrcpy-based remote control/mirroring is unbuilt: it needs fetching `scrcpy-server.jar`,
- * pushing it to the target, an `app_process`-started server, a `MediaCodec` H.264 decoder, and a
- * control-message protocol — out of scope for this pass (user decision: stub this visibly rather
- * than build it or omit the tab).
- */
-@Composable
-private fun MirrorScreen(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Text(
-            "Screen mirroring isn't implemented yet. Use the Monitor tab for screenshots instead.",
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
     }
 }
