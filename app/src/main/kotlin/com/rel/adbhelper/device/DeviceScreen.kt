@@ -25,6 +25,7 @@ import com.rel.adbhelper.features.apps.AppsScreen
 import com.rel.adbhelper.features.deviceinfo.InfoScreen
 import com.rel.adbhelper.features.files.FilesScreen
 import com.rel.adbhelper.features.livescreen.LiveScreenScreen
+import com.rel.adbhelper.features.logs.LogsScreen
 import com.rel.adbhelper.features.power.PowerScreen
 import com.rel.adbhelper.features.processes.ProcessListScreen
 import com.rel.adbhelper.features.shell.ShellScreen
@@ -36,6 +37,7 @@ private val TABS: List<Pair<String, @Composable () -> Unit>> = listOf(
     "Files" to { FilesScreen() },
     "Shell" to { ShellScreen() },
     "Processes" to { ProcessListScreen() },
+    "Logs" to { LogsScreen() },
     "Power" to { PowerScreen() },
     "Monitor" to { LiveScreenScreen() },
     "Mirror" to { MirrorScreen() },
@@ -44,7 +46,7 @@ private val TABS: List<Pair<String, @Composable () -> Unit>> = listOf(
 /** Hub screen shown once a target is connected; one tab per feature.
  *
  * [ScrollableTabRow], not the fixed [androidx.compose.material3.TabRow]: a fixed tab row divides
- * the screen width evenly across all tabs, and eight labels ("Monitor", "Mirror", …) don't fit
+ * the screen width evenly across all tabs, and nine labels ("Monitor", "Mirror", …) don't fit
  * un-clipped at that width on a phone-width screen — this scrolls instead of squeezing/clipping
  * labels.
  */
