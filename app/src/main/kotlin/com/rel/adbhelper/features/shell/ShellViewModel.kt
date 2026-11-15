@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ShellViewModel(
     private val client: AdbClient,
@@ -28,12 +29,21 @@ class ShellViewModel(
 
     private var stream: AdbStream? = null
     private var reader: Job? = null
+    private var closed = false
 
     fun start() {
         if (stream != null) return
+        closed = false
         scope.launch {
             try {
-                stream = client.openService("shell:")
+                val opened = client.openService("shell:")
+                // close() ran while the open was still in flight: nothing else will ever close
+                // this stream, so do it here.
+                if (closed) {
+                    withContext(closeDispatcher) { opened.close() }
+                    return@launch
+                }
+                stream = opened
                 _state.value = _state.value.copy(connected = true, message = "")
                 reader = scope.launch {
                     // A forced close (see restart's doc) makes a blocked readChunk() throw
@@ -67,7 +77,17 @@ class ShellViewModel(
 
     fun send(command: String) {
         val s = stream ?: return
-        scope.launch { s.write((command + "\n").toByteArray(Charsets.UTF_8)) }
+        scope.launch {
+            // A write on a dead stream throws; uncaught in this handler-less scope it would crash
+            // the whole app.
+            try {
+                s.write((command + "\n").toByteArray(Charsets.UTF_8))
+            } catch (c: kotlinx.coroutines.CancellationException) {
+                throw c
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(connected = false, message = "Shell session ended")
+            }
+        }
     }
 
     fun clear() {
@@ -92,6 +112,17 @@ class ShellViewModel(
             _state.value = _state.value.copy(output = emptyList(), connected = false, message = "")
             start()
         }
+    }
+
+    /** Ends the session when the Shell tab is left — otherwise every visit leaks a blocked reader
+     * thread and a remote shell. The stream is closed off the calling thread, see [restart]. */
+    fun close() {
+        closed = true
+        val s = stream
+        stream = null
+        reader?.cancel()
+        reader = null
+        if (s != null) scope.launch(closeDispatcher) { runCatching { s.close() } }
     }
 
     /** One-shot `setprop ctl.restart adbd` — needs root on the target; failure surfaces as a message. */

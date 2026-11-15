@@ -11,6 +11,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,6 +33,7 @@ fun ShellScreen(modifier: Modifier = Modifier) {
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) { viewModel.start() }
+    DisposableEffect(Unit) { onDispose { viewModel.close() } }
     LaunchedEffect(state.output.size) {
         if (state.output.isNotEmpty()) listState.scrollToItem(state.output.size - 1)
     }

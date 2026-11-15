@@ -15,9 +15,11 @@ import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 
-private class RecordingStream : AdbStream {
-    var closedOnThread: Thread? = null
-    override suspend fun write(data: ByteArray) {}
+private class RecordingStream(private val writeFailure: Throwable? = null) : AdbStream {
+    @Volatile var closedOnThread: Thread? = null
+    override suspend fun write(data: ByteArray) {
+        writeFailure?.let { throw it }
+    }
     override suspend fun readAll(): ByteArray = ByteArray(0)
 
     // Never resolves on its own — a real terminal session's reader loop sits here until the
@@ -134,5 +136,46 @@ class ShellViewModelTest {
         }
 
         assertNull(uncaught, "expected no uncaught exception from the old reader's forced close, got $uncaught")
+    }
+
+    @Test
+    fun `close closes the stream off the calling thread`() {
+        // Leaving the Shell tab used to leak the session: nothing ever closed the stream.
+        val stream = RecordingStream()
+        val callingThread = Thread.currentThread()
+        val vm = ShellViewModel(
+            AdbClient(RecordingTransport(stream), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            closeDispatcher = Dispatchers.IO,
+        )
+        vm.start()
+        assertTrue(vm.state.value.connected, "expected the shell session to connect, got ${vm.state.value}")
+
+        vm.close()
+        val closeDeadline = System.currentTimeMillis() + 2_000
+        while (stream.closedOnThread == null && System.currentTimeMillis() < closeDeadline) {
+            Thread.sleep(10)
+        }
+
+        assertTrue(stream.closedOnThread != null, "expected close() to have been called")
+        assertFalse(stream.closedOnThread === callingThread, "expected close() to run off the calling thread")
+    }
+
+    @Test
+    fun `send on a dead stream marks the session ended instead of crashing`() {
+        var uncaught: Throwable? = null
+        val scope = CoroutineScope(Dispatchers.Unconfined + CoroutineExceptionHandler { _, e -> uncaught = e })
+        val vm = ShellViewModel(
+            AdbClient(RecordingTransport(RecordingStream(writeFailure = IOException("Stream closed."))), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = scope,
+        )
+        vm.start()
+        assertTrue(vm.state.value.connected, "expected the shell session to connect, got ${vm.state.value}")
+
+        vm.send("ls")
+
+        assertNull(uncaught, "expected the failed write to be handled, got $uncaught")
+        assertFalse(vm.state.value.connected)
+        assertTrue(vm.state.value.message.isNotEmpty(), "expected a message explaining the session ended")
     }
 }
