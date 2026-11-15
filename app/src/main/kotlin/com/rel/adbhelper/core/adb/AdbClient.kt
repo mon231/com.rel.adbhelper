@@ -112,8 +112,11 @@ class AdbClient(
     private val rawChunkTimeoutMillis: Long = RAW_CHUNK_TIMEOUT_MILLIS,
 ) {
 
-    suspend fun shell(command: String): AdbResult = try {
-        runShell(command)
+    /** [timeoutMillis] bounds each wait for the command's next output, not the whole command —
+     * raise it for a command that legitimately prints nothing for a long time (`pm install` of a
+     * large APK), which the default would otherwise force-close mid-run. */
+    suspend fun shell(command: String, timeoutMillis: Long = commandTimeoutMillis): AdbResult = try {
+        runShell(command, timeoutMillis)
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
@@ -243,12 +246,12 @@ class AdbClient(
      * protocol-independent completion signal; trusting it instead of the stream's own (unreliable)
      * end-of-stream notification sidesteps the library bug entirely for every one-shot command.
      */
-    private suspend fun runShell(command: String): AdbResult {
+    private suspend fun runShell(command: String, timeoutMillis: Long): AdbResult {
         val stream = openWithTimeout("shell:$command; echo $EXIT_CODE_MARKER\$?")
         try {
             val buffer = java.io.ByteArrayOutputStream()
             while (true) {
-                val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                val chunk = stream.timingOutOnClose(timeoutMillis, watchdogDispatcher, transport::invalidate) {
                     readChunk()
                 } ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
                 buffer.write(chunk)

@@ -170,6 +170,25 @@ class AdbClientTest {
     }
 
     @Test
+    fun `shell honours a per-call timeout instead of the client-wide one`() {
+        // Plain runBlocking for the same reason as the raw watchdog test above: only a real
+        // wall-clock bound observes which timeout fired.
+        val transport = FakeAdbTransport(scriptedOutput = "no marker yet", omitExitMarker = true, neverSignalsEof = true)
+        val client = AdbClient(transport, commandTimeoutMillis = 5_000L, watchdogDispatcher = Dispatchers.Unconfined)
+
+        var result: AdbResult? = null
+        val elapsedMillis = kotlin.system.measureTimeMillis {
+            result = kotlinx.coroutines.runBlocking { client.shell("pm install x", timeoutMillis = 300L) }
+        }
+
+        assertTrue(result is AdbResult.TransportUnreachable, "expected the stuck read to be force-closed, got $result")
+        assertTrue(
+            elapsedMillis < 2_000,
+            "expected the per-call timeout (300ms) to fire, not commandTimeoutMillis (5000ms) — took ${elapsedMillis}ms",
+        )
+    }
+
+    @Test
     fun `raw returns the stream bytes verbatim without any exit-marker framing`() = runTest {
         val payload = byteArrayOf(0x89.toByte(), 0x50.toByte(), 0x4E.toByte(), 0x47.toByte(), 0x00.toByte(), 0x0A.toByte())
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to payload))

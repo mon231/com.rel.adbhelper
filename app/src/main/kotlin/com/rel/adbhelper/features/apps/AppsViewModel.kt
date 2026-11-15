@@ -111,7 +111,9 @@ class AppsViewModel(
             try {
                 val tempPath = "/data/local/tmp/adbhelper-install.apk"
                 client.push(tempPath, bytes)
-                val result = client.shell("pm install -r ${shellQuote(tempPath)}")
+                // pm install prints nothing until it finishes, which for a large APK is far
+                // longer than the default per-read timeout.
+                val result = client.shell("pm install -r ${shellQuote(tempPath)}", timeoutMillis = INSTALL_TIMEOUT_MILLIS)
                 client.shell("rm ${shellQuote(tempPath)}")
                 _state.value = _state.value.copy(
                     busy = if (result is AdbResult.Success) "Installed $name" else "Install failed",
@@ -142,4 +144,8 @@ class AppsViewModel(
     }
 
     private fun AdbResult.success(): String? = (this as? AdbResult.Success)?.output
+
+    private companion object {
+        const val INSTALL_TIMEOUT_MILLIS = 5 * 60_000L
+    }
 }
