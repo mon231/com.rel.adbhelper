@@ -50,6 +50,14 @@ A persistent interactive terminal session: type a command, see streamed output. 
 output** resets the scrollback; **Restart terminal** closes and reopens the session;
 **Restart adb server** issues `setprop ctl.restart adbd` (needs root on the target).
 
+## Logs
+
+A live tail of the target's `logcat` (the last 200 lines, then following), coloured by level.
+**Pause**/**Resume** holds the list still (lines arriving while paused are skipped), **Clear**
+empties it, **Level** sets the minimum level shown (Verbose to Error), and the filter field
+matches tag or message text, ignoring case. The view follows the newest line while scrolled
+to the bottom and keeps the newest 5000 lines. Leaving the tab ends the remote `logcat`.
+
 ## Monitor
 
 A live, auto-refreshing view of the target's screen, built from repeated screenshots rather
