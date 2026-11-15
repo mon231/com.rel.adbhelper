@@ -67,6 +67,33 @@ private class SingleStreamTransport(private val stream: AdbStream) : AdbTranspor
 class ShellViewModelTest {
 
     @Test
+    fun `restartAdbServer reports success when the restart drops the link`() {
+        val vm = ShellViewModel(
+            AdbClient(FakeAdbTransport(throwOnRead = IOException("Stream closed.")), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.restartAdbServer()
+
+        assertEquals("adb server restart requested", vm.state.value.message)
+    }
+
+    @Test
+    fun `restartAdbServer reports a command the target rejected`() {
+        val vm = ShellViewModel(
+            AdbClient(
+                FakeAdbTransport(scriptedOutput = "Failed to set property\n", exitCode = 1),
+                watchdogDispatcher = Dispatchers.Unconfined,
+            ),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.restartAdbServer()
+
+        assertTrue(vm.state.value.message.startsWith("Failed to restart adb server"), "got ${vm.state.value.message}")
+    }
+
+    @Test
     fun `output keeps only the newest entries`() {
         // One byte per chunk: five more chunks than the cap, then the stream ends.
         val transport = FakeAdbTransport(

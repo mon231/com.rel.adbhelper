@@ -60,19 +60,38 @@ class PowerViewModel(
         }
     }
 
-    private fun run(command: String, successMessage: String, onDone: () -> Unit = {}) {
+    /**
+     * [cutsLink]: the command takes the connection down before its exit code can come back
+     * (reboot, turning wireless debugging off), so the success message is shown as soon as it is
+     * sent and a connection lost afterwards is the expected outcome, not a failure.
+     */
+    private fun run(command: String, successMessage: String, cutsLink: Boolean = false, onDone: () -> Unit = {}) {
         scope.launch {
+            if (cutsLink) _state.value = _state.value.copy(message = successMessage)
             val result = client.shell(command)
-            _state.value = _state.value.copy(
-                message = if (result is AdbResult.Success) successMessage else "Command failed",
-            )
+            val succeeded = if (cutsLink) !result.isRejection() else result is AdbResult.Success
+            _state.value = _state.value.copy(message = if (succeeded) successMessage else "Command failed")
             onDone()
         }
     }
 
-    fun reboot() = run(PowerCommands.reboot(), "Rebooting")
-    fun rebootRecovery() = run(PowerCommands.rebootRecovery(), "Rebooting to recovery")
-    fun rebootBootloader() = run(PowerCommands.rebootBootloader(), "Rebooting to bootloader")
+    fun reboot() = run(PowerCommands.reboot(), "Rebooting", cutsLink = true)
+    fun rebootRecovery() = run(PowerCommands.rebootRecovery(), "Rebooting to recovery", cutsLink = true)
+    fun rebootBootloader() = run(PowerCommands.rebootBootloader(), "Rebooting to bootloader", cutsLink = true)
     fun enableWirelessDebugging() = run(PowerCommands.enableWirelessDebugging(), "Wireless debugging enabled")
-    fun disableWirelessDebugging() = run(PowerCommands.disableWirelessDebugging(), "Wireless debugging disabled")
+    fun disableWirelessDebugging() =
+        run(PowerCommands.disableWirelessDebugging(), "Wireless debugging disabled", cutsLink = true)
 }
+
+/**
+ * True when the target itself rejected the command (non-zero exit, e.g. permission denied) —
+ * as opposed to the link dropping before any exit status arrived, which is what a command that
+ * cuts the connection (reboot, restarting adbd) looks like when it works. [AdbClient.shell]
+ * reports that second case either as [AdbResult.TransportUnreachable] or as a
+ * [AdbResult.CommandFailed] carrying [NO_EXIT_STATUS].
+ */
+internal fun AdbResult.isRejection(): Boolean = this is AdbResult.CommandFailed && message != NO_EXIT_STATUS
+
+/** Must match [AdbClient]'s message for a shell stream that ended without the exit marker
+ * (pinned by `PowerViewModelTest`). */
+private const val NO_EXIT_STATUS = "remote shell closed without an exit status"

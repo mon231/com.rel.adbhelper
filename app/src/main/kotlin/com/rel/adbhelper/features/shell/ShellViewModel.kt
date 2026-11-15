@@ -2,6 +2,7 @@ package com.rel.adbhelper.features.shell
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbStream
+import com.rel.adbhelper.features.power.isRejection
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -130,17 +131,15 @@ class ShellViewModel(
         if (s != null) scope.launch(closeDispatcher) { runCatching { s.close() } }
     }
 
-    /** One-shot `setprop ctl.restart adbd` — needs root on the target; failure surfaces as a message. */
+    /** One-shot `setprop ctl.restart adbd` — needs root on the target; failure surfaces as a
+     * message. A restarting adbd drops this very connection before an exit code can come back,
+     * so only the target actually rejecting the command counts as failure. */
     fun restartAdbServer() {
         scope.launch {
-            val result = client.shell("setprop ctl.restart adbd")
-            _state.value = _state.value.copy(
-                message = if (result is com.rel.adbhelper.core.adb.AdbResult.Success) {
-                    "adb server restart requested"
-                } else {
-                    "Failed to restart adb server (needs root on the target)"
-                },
-            )
+            _state.value = _state.value.copy(message = "adb server restart requested")
+            if (client.shell("setprop ctl.restart adbd").isRejection()) {
+                _state.value = _state.value.copy(message = "Failed to restart adb server (needs root on the target)")
+            }
         }
     }
 }
