@@ -18,6 +18,11 @@ import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import java.security.interfaces.RSAPrivateCrtKey
+import java.security.spec.RSAPublicKeySpec
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -139,20 +144,57 @@ class AdbKeyConnectionManager private constructor(
             return AdbKeyConnectionManager(privateKey, certificate)
         }
 
-        private fun loadOrGenerateKeyPair(context: Context): Pair<PrivateKey, Certificate> {
-            val keyFile = File(context.filesDir, "adb_private.key")
-            val certFile = File(context.filesDir, "adb_cert.pem")
-            if (keyFile.exists() && certFile.exists()) {
-                val privateKey = KeyFactory.getInstance("RSA")
-                    .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
-                val certificate = CertificateFactory.getInstance("X.509")
-                    .generateCertificate(certFile.inputStream())
-                return privateKey to certificate
+        /** 30 years, so the certificate effectively never expires under the app. */
+        private const val CERT_VALIDITY_DAYS = 30L * 365
+
+        private val keyLock = Any()
+        private var cachedPair: Pair<PrivateKey, Certificate>? = null
+
+        /** Single lock around load-or-generate: concurrent scan probes must share one identity. */
+        private fun loadOrGenerateKeyPair(context: Context): Pair<PrivateKey, Certificate> =
+            synchronized(keyLock) {
+                cachedPair ?: loadOrGenerateFromDisk(context.filesDir).also { cachedPair = it }
             }
+
+        private fun loadOrGenerateFromDisk(dir: File): Pair<PrivateKey, Certificate> {
+            val keyFile = File(dir, "adb_private.key")
+            val certFile = File(dir, "adb_cert.pem") // holds DER bytes despite the name
+            val loaded = try {
+                if (keyFile.exists() && certFile.exists()) readPair(keyFile, certFile) else null
+            } catch (_: Exception) {
+                null
+            }
+            if (loaded != null) return loaded
             val (privateKey, certificate) = generateKeyPair()
-            keyFile.writeBytes(privateKey.encoded)
-            certFile.writeBytes(certificate.encoded)
+            writeAtomically(keyFile, privateKey.encoded)
+            writeAtomically(certFile, certificate.encoded)
             return privateKey to certificate
+        }
+
+        /** Null when the files do not form a usable identity (caller regenerates both). */
+        private fun readPair(keyFile: File, certFile: File): Pair<PrivateKey, Certificate>? {
+            val privateKey = KeyFactory.getInstance("RSA")
+                .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
+            var certificate = certFile.inputStream().use {
+                CertificateFactory.getInstance("X.509").generateCertificate(it)
+            } as X509Certificate
+            if (!keysMatch(privateKey, certificate.publicKey)) return null
+            if (certNeedsReissue(certificate.notAfter, Date())) {
+                // Same private key, so devices that already trust this app still recognise it.
+                val crt = privateKey as? RSAPrivateCrtKey ?: return null
+                val publicKey = KeyFactory.getInstance("RSA")
+                    .generatePublic(RSAPublicKeySpec(crt.modulus, crt.publicExponent))
+                certificate = selfSignedCertificate(publicKey, privateKey) as X509Certificate
+                writeAtomically(certFile, certificate.encoded)
+            }
+            return privateKey to certificate
+        }
+
+        /** Writes to a temp file in the same directory, then renames over [target]. */
+        private fun writeAtomically(target: File, bytes: ByteArray) {
+            val tmp = File(target.parentFile, target.name + ".tmp")
+            tmp.writeBytes(bytes)
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
 
         private fun generateKeyPair(): Pair<PrivateKey, Certificate> {
@@ -168,7 +210,7 @@ class AdbKeyConnectionManager private constructor(
             val now = System.currentTimeMillis()
             val serial = BigInteger.valueOf(now)
             val notBefore = Date(now)
-            val notAfter = Date(now + 365L * 24 * 60 * 60 * 1000)
+            val notAfter = Date(now + TimeUnit.DAYS.toMillis(CERT_VALIDITY_DAYS))
             val builder = X509v3CertificateBuilder(
                 subject, serial, notBefore, notAfter, subject,
                 org.bouncycastle.asn1.x509.SubjectPublicKeyInfo.getInstance(publicKey.encoded),
