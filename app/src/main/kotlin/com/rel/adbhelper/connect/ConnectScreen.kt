@@ -140,7 +140,7 @@ fun ConnectScreen(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(onClick = {
+            TextButton(enabled = !scanning, onClick = {
                 scope.launch {
                     scanning = true
                     scanResults = emptyList()
