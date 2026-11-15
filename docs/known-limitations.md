@@ -19,15 +19,25 @@ from the UI. Use a network connection (address entry, Scan, or Pair) in the mean
 
 ## Screen mirroring (scrcpy)
 
-Not implemented. The original app includes full interactive screen mirroring/remote control
-(video + input injection) based on [scrcpy](https://github.com/Genymobile/scrcpy)'s server and
-protocol. Building this requires fetching and pushing `scrcpy-server.jar` to the target,
-starting it via `app_process`, decoding its H.264 stream with `MediaCodec`, and implementing
-its control-message protocol for input — each a significant piece of work on its own.
+The **Mirror** tab streams the target's screen with the bundled scrcpy server and forwards
+touches, Back, Home and Recents. Limits:
 
-The **Mirror** tab in the device hub is a visible placeholder for the same reason as the USB
-button above. The **Monitor** tab is a lighter substitute available today: a live view built
-from repeated screenshots, not a real video stream, and view-only.
+- **No audio**, clipboard sync, file drop or recording; video and touch control only.
+- **H.264 only**, at most 1280 pixels on the long side and 4 Mbit/s, tuned for Wi-Fi.
+- The target needs **Android 5 or newer**. The server runs as the ADB `shell` user, so apps that
+  block screen capture and **DRM-protected content show black**.
+- The server version is pinned: the bundled `scrcpy-server.jar` and the client protocol code
+  change together, never one without the other (see [Third-party notices](third-party.md)).
+- Some vendor ROMs refuse to start the server (`app_process` failures, or an encoder that rejects
+  the requested size). The screen then shows the server's error text; a lower size or another
+  encoder cannot be chosen from the UI yet.
+- Network targets use a second, dedicated ADB connection while Mirror is open, so the target
+  sees two ADB clients. USB targets share the existing connection.
+- Touch only: no hardware keyboard input, no mouse hover or scroll wheel.
+- The decoder and touch path are covered by unit tests only where they are pure logic; they have
+  not been run against a real device yet.
+
+The **Monitor** tab remains a lighter alternative: screenshots refreshed in a loop, view only.
 
 ## No live-device CI
 

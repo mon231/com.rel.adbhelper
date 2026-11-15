@@ -41,3 +41,18 @@ There's no comparable well-known Android-hosted client library for fastboot, so 
 bootloader flows are expected to shell out to a genuine prebuilt `fastboot` binary via
 `ProcessBuilder` once that part of the design lands, rather than a hand-rolled USB fastboot
 client.
+
+## Mirroring
+
+The Mirror tab runs the bundled scrcpy server (`assets/scrcpy-server.jar`, pinned to one release;
+see `core/scrcpy/README.md`). `core/scrcpy/ScrcpyProtocol` and `ControlMessages` are pure
+encoders and parsers for that release's wire format, read through `ByteStreamReader`, which
+reassembles fields from arbitrarily sized stream chunks. `ScrcpySession` pushes the jar, starts the
+server over a long-lived `shell:` stream, then opens the video socket (the server sends a dummy
+byte), the control socket, and only then reads the device name and codec id. It needs three
+simultaneous streams, so network targets get their own `AdbKeyConnectionManager.createDisposable`
+connection instead of the shared one. In `features/mirror`, `MirrorViewModel` owns the session
+and reads packets on a dedicated thread into a `VideoSink`; `VideoDecoder` (`MediaCodec` to a
+`SurfaceView`) is the sink and is released and recreated with the surface, asking the server for a
+fresh key frame when it loses its place. `mapToVideo` converts touches from view to video
+coordinates.

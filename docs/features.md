@@ -64,6 +64,16 @@ A live, auto-refreshing view of the target's screen, built from repeated screens
 than a true video stream — see [Known limitations](known-limitations.md) for how this differs
 from full screen mirroring.
 
+## Mirror
+
+Live video of the target's screen with touch control, using the bundled
+[scrcpy](https://github.com/Genymobile/scrcpy) server (see [Third-party notices](third-party.md)).
+Tap and drag on the video to inject touches (several fingers at once are forwarded by pointer),
+and use the **Back**, **Home** and **Recents** buttons below it. The video is H.264, capped at
+1280 pixels on its long side, and follows the target's rotation. Leaving the tab stops the
+server on the target. If the server cannot start, the screen shows the server's own error
+message and a **Try again** button. Video and control only: no audio, clipboard sync or file drop.
+
 ## Power
 
 - **Advanced reboot** — normal, recovery, or bootloader, each behind a confirmation.
