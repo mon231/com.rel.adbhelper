@@ -80,4 +80,24 @@ class PowerViewModelTest {
 
         assertEquals("Density set to 420", vm.state.value.message)
     }
+
+    @Test
+    fun `load reports a dead link instead of showing an empty screen`() = runTest {
+        val vm = PowerViewModel(client(FakeAdbTransport(throwOnRead = java.io.IOException("Stream closed."))), scope = this)
+
+        vm.load()
+        advanceUntilIdle()
+
+        assertEquals("Connection to the device was lost", vm.state.value.message)
+    }
+
+    @Test
+    fun `load reads the physical density`() = runTest {
+        val vm = PowerViewModel(client(FakeAdbTransport(scriptedOutput = "Physical density: 420\n")), scope = this)
+
+        vm.load()
+        advanceUntilIdle()
+
+        assertEquals(420, vm.state.value.currentDensity)
+    }
 }

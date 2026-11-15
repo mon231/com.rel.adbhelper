@@ -2,6 +2,7 @@ package com.rel.adbhelper.features.power
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.power.PowerCommands
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +31,7 @@ class PowerViewModel(
     fun load() {
         scope.launch {
             try {
-                val wm = (client.shell(PowerCommands.currentDensity()) as? AdbResult.Success)?.output.orEmpty()
+                val wm = client.shell(PowerCommands.currentDensity()).outputOrThrow()
                 val density = Regex("Physical density: (\\d+)").find(wm)?.groupValues?.get(1)?.toIntOrNull()
                 _state.value = State(currentDensity = density, densityInput = density?.toString().orEmpty())
             } catch (t: Throwable) {
