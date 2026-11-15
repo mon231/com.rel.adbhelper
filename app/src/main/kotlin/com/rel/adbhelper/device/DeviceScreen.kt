@@ -1,5 +1,6 @@
 package com.rel.adbhelper.device
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -40,8 +41,11 @@ private val TAB_TITLES = listOf("Info", "Apps", "Files", "Shell", "Power", "Moni
 fun DeviceScreen(modifier: Modifier = Modifier) {
     var selected by remember { mutableIntStateOf(0) }
 
+    // Not on a configuration change (rotation, dark mode): the hub is recomposed straight away
+    // and every tab needs the session still attached.
+    val activity = LocalActivity.current
     DisposableEffect(Unit) {
-        onDispose { DeviceSession.detach() }
+        onDispose { if (activity?.isChangingConfigurations != true) DeviceSession.detach() }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
