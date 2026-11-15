@@ -2,6 +2,8 @@ package com.rel.adbhelper.features.deviceinfo
 
 import android.content.Context
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.device.DeviceInfo
 import com.rel.adbhelper.core.device.buildDeviceInfo
 import com.rel.adbhelper.core.device.parseGetprop
@@ -29,12 +31,12 @@ class DeviceInfoViewModel(
         scope.launch {
             _state.value = State(loading = true)
             _state.value = try {
-                val props = parseGetprop(client.shell("getprop").takeSuccess().orEmpty())
-                val battery = client.shell("dumpsys battery").takeSuccess().orEmpty()
-                val df = client.shell("df -k /data").takeSuccess().orEmpty()
-                val wm = client.shell("wm size; wm density").takeSuccess().orEmpty()
-                val ip = client.shell("ip addr show wlan0").takeSuccess().orEmpty()
-                val cores = client.shell("nproc").takeSuccess().orEmpty().trim().toIntOrNull() ?: 0
+                val props = parseGetprop(client.shell("getprop").outputOrEmpty())
+                val battery = client.shell("dumpsys battery").outputOrEmpty()
+                val df = client.shell("df -k /data").outputOrEmpty()
+                val wm = client.shell("wm size; wm density").outputOrEmpty()
+                val ip = client.shell("ip addr show wlan0").outputOrEmpty()
+                val cores = client.shell("nproc").outputOrEmpty().trim().toIntOrNull() ?: 0
                 State(loading = false, info = buildDeviceInfo(props, battery, df, wm, ip, cores))
             } catch (t: Throwable) {
                 State(loading = false, message = "Connection to the device was lost")
@@ -57,6 +59,8 @@ class DeviceInfoViewModel(
         }
     }
 
-    private fun com.rel.adbhelper.core.adb.AdbResult.takeSuccess(): String? =
-        (this as? com.rel.adbhelper.core.adb.AdbResult.Success)?.output
+    /** One command the target rejects (no wlan0, no `nproc`) only blanks its own row; a dead
+     * link throws, so [load] reports it instead of showing an all-empty panel. */
+    private fun AdbResult.outputOrEmpty(): String =
+        if (this is AdbResult.CommandFailed) "" else outputOrThrow()
 }

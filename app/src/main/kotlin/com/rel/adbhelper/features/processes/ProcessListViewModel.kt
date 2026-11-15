@@ -1,6 +1,7 @@
 package com.rel.adbhelper.features.processes
 
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.proc.ProcessEntry
 import com.rel.adbhelper.core.proc.parsePs
 import kotlinx.coroutines.CoroutineScope
@@ -27,10 +28,9 @@ class ProcessListViewModel(
         scope.launch {
             _state.value = State(loading = true)
             _state.value = try {
-                val raw = (client.shell("ps -A") as? com.rel.adbhelper.core.adb.AdbResult.Success)?.output.orEmpty()
-                State(loading = false, processes = parsePs(raw))
+                State(loading = false, processes = parsePs(client.shell("ps -A").outputOrThrow()))
             } catch (t: Throwable) {
-                State(loading = false, message = "Connection to the device was lost")
+                State(loading = false, message = t.message ?: "Connection to the device was lost")
             }
         }
     }
