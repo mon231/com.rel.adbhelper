@@ -10,8 +10,8 @@ record of what was done.
   `mkdocs build` succeeds.
 - All code work planned so far is merged: the audit fixes, Logs tab, mDNS discovery, USB-OTG
   transport and scrcpy mirroring.
-- **Nothing on `dev` has been run against a real device.** Everything below needs either the
-  repository owner or hardware.
+- **Nothing on `dev` has been run against a real device or emulator.** Everything below needs
+  hardware.
 
 ## Conventions
 
@@ -23,22 +23,7 @@ record of what was done.
 
 ---
 
-## 1. Release signing (repository owner)
-
-Workflows sign with the project's keystore from four GitHub Actions secrets:
-`SIGNING_KEYSTORE_BASE64`, `SIGNING_KEYSTORE_PASSWORD`, `SIGNING_KEY_ALIAS`,
-`SIGNING_KEY_PASSWORD` (`docs/contributing.md`, "Release signing").
-
-- [ ] Create the keystore, add the secrets, keep an offline backup.
-- [ ] Push a test tag; confirm the `android` job signs and `apksigner verify` passes (the new
-      steps have only been checked for valid YAML).
-
-Until then a `v*` tag fails on purpose and `build.yml` uploads a debug-signed APK. New APKs will
-not install over `v0.1.0`: users uninstall once; say so in the release notes.
-
----
-
-## 2. Verify on a real device, fix what fails
+## 1. Verify on a real device, fix what fails
 
 General:
 - [ ] Rotate and toggle dark mode while connected: no crash, same tab, hub stays connected.
@@ -82,18 +67,20 @@ Mirror (codecs and session are tested with fakes; decoder, surface and touch nev
 
 ---
 
-## 3. Housekeeping
+## 2. Housekeeping
 
 - [ ] Remove leftover agent worktrees and branches (`.claude/worktrees/agent-*`,
       `worktree-agent-*`, and the old `adbhelper-scaffold`); all their commits are on `dev`.
 - [ ] When bumping scrcpy: replace the asset, update `core/scrcpy/README.md` (version, URL,
       SHA-256) and re-check the wire formats against that tag; the protocol is version-locked.
 
-## 4. Before merging `dev` to `main`
+## 3. Before merging `dev` to `main`
 
-- [ ] Section 2 done for whatever the release notes claim; unverified features labelled as such.
-- [ ] Signing secrets in place (section 1).
+- [ ] Section 1 done for whatever the release notes claim; unverified features labelled as such.
 - [ ] CI green on `dev`.
+
+Signing stays on `signapp` from PyPI with its built-in keystore (owner's decision), so builds
+keep installing over `v0.1.0`.
 
 ---
 

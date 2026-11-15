@@ -29,34 +29,6 @@ pip install mkdocs-material
 mkdocs serve
 ```
 
-## Release signing
-
-CI signs APKs with the project's own keystore, held in GitHub Actions secrets, using the SDK's
-`zipalign` and `apksigner`. The release workflow fails if any of these is missing; the build
-workflow falls back to the debug-key-signed APK (pull requests from forks have no secrets).
-
-| Secret | Value |
-| --- | --- |
-| `SIGNING_KEYSTORE_BASE64` | The keystore file, base64-encoded |
-| `SIGNING_KEYSTORE_PASSWORD` | Keystore password |
-| `SIGNING_KEY_ALIAS` | Alias of the signing key inside the keystore |
-| `SIGNING_KEY_PASSWORD` | Password of that key |
-
-Creating a keystore and encoding it:
-
-```bash
-keytool -genkeypair -v -keystore adbhelper.jks -alias adbhelper \
-  -keyalg RSA -keysize 4096 -validity 10000
-base64 -w0 adbhelper.jks   # paste the output into SIGNING_KEYSTORE_BASE64
-```
-
-Keep the keystore and its passwords backed up somewhere private and never commit them: losing
-the key means no further updates can be installed over existing installs.
-
-APKs signed with this key **cannot be installed over** builds signed with the old signapp
-built-in key (Android rejects the signature change). Anyone with such a build must uninstall
-it once before installing a newer one.
-
 ## Picking up a known gap
 
 [Known limitations](known-limitations.md) lists the two biggest gaps (USB-OTG transport, screen
