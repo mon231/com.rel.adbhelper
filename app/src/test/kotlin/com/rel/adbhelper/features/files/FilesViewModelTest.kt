@@ -28,6 +28,48 @@ private fun shellService(command: String) = "shell:$command; echo __ADBHELPER_EX
 @OptIn(ExperimentalCoroutinesApi::class)
 class FilesViewModelTest {
 
+    // A space and a single quote: the two characters that break naive shell interpolation.
+    private val awkward = entry("/sdcard/it's a file.txt")
+    private val awkwardQuoted = """'/sdcard/it'\''s a file.txt'"""
+
+    @Test
+    fun `delete quotes the path`() = runTest {
+        val transport = FakeAdbTransport()
+        val vm = FilesViewModel(client(transport), scope = this)
+
+        vm.delete(awkward)
+        advanceUntilIdle()
+
+        assertTrue(shellService("rm -rf $awkwardQuoted") in transport.closedServices, "ran: ${transport.closedServices}")
+    }
+
+    @Test
+    fun `rename quotes both paths`() = runTest {
+        val transport = FakeAdbTransport()
+        val vm = FilesViewModel(client(transport), scope = this)
+
+        vm.rename(awkward, "it's new.txt")
+        advanceUntilIdle()
+
+        assertTrue(
+            shellService("""mv $awkwardQuoted '/sdcard/it'\''s new.txt'""") in transport.closedServices,
+            "ran: ${transport.closedServices}",
+        )
+    }
+
+    @Test
+    fun `paste quotes the source and targets the current directory`() = runTest {
+        val transport = FakeAdbTransport()
+        val vm = FilesViewModel(client(transport), scope = this)
+
+        vm.copy(awkward)
+        vm.paste()
+        advanceUntilIdle()
+
+        assertTrue(shellService("cp -r $awkwardQuoted '/sdcard'") in transport.closedServices, "ran: ${transport.closedServices}")
+        assertEquals(null, vm.state.value.copiedFrom)
+    }
+
     @Test
     fun `tapping a symlink opens it as a directory`() = runTest {
         // /sdcard is a symlink: its perms start with "l", so isDir is false.
