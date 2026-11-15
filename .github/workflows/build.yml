@@ -16,20 +16,31 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Build and run unit tests
         run: bash ./gradlew build
 
-      - name: Sign APK with signapp (same built-in keystore as releases, so it updates in place)
+      # Signs with the project's own keystore when the secrets are available. Pull requests
+      # from forks have no secrets: the Gradle debug APK (debug-key signed) is uploaded as-is.
+      - name: Sign APK with the project keystore (when secrets are available)
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          pip install signapp
+          set -euo pipefail
+          built=$(ls app/build/outputs/apk/debug/*.apk)
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ] || [ -z "$SIGNING_KEYSTORE_PASSWORD" ]             || [ -z "$SIGNING_KEY_ALIAS" ] || [ -z "$SIGNING_KEY_PASSWORD" ]; then
+            echo "::notice::Signing secrets not available: uploading the debug-key-signed APK as-is."
+            cp "$built" adbhelper-signed.apk
+            exit 0
+          fi
           export PATH="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1):$PATH"
-          mkdir -p ~/.reltools
-          unsigned=$(ls app/build/outputs/apk/debug/*.apk)
-          signapp -a "$unsigned" -o adbhelper-signed.apk
+          keystore="$RUNNER_TEMP/signing.jks"
+          trap 'rm -f "$keystore" "$RUNNER_TEMP/aligned.apk"' EXIT
+          printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          zipalign -f -p 4 "$built" "$RUNNER_TEMP/aligned.apk"
+          apksigner sign --ks "$keystore" --ks-key-alias "$SIGNING_KEY_ALIAS"             --ks-pass env:SIGNING_KEYSTORE_PASSWORD --key-pass env:SIGNING_KEY_PASSWORD             --out adbhelper-signed.apk "$RUNNER_TEMP/aligned.apk"
           apksigner verify --verbose adbhelper-signed.apk
 
       - uses: actions/upload-artifact@v4

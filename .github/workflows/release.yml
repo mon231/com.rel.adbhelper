@@ -45,9 +45,22 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      # A release must never fall back to a publicly known key: stop before building.
+      - name: Require signing secrets
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in SIGNING_KEYSTORE_BASE64 SIGNING_KEYSTORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Repository secret $name is not set. See docs/contributing.md (Release signing)."
+              missing=1
+            fi
+          done
+          exit "$missing"
 
       - name: Build unsigned release APK
         run: >
@@ -55,15 +68,21 @@ jobs:
           -PversionName=${GITHUB_REF_NAME#v}
           -PversionCode=${{ github.run_number }}
 
-      - name: Sign APK with signapp
+      - name: Sign APK with the project keystore
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          pip install signapp
-          # signapp shells out to zipalign and apksigner: use the runner's SDK build-tools
+          set -euo pipefail
           export PATH="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1):$PATH"
-          mkdir -p ~/.reltools
           unsigned=$(ls app/build/outputs/apk/release/*.apk)
-          # no -k: signapp signs with its built-in keystore
-          signapp -a "$unsigned" -o "adbhelper-${GITHUB_REF_NAME}.apk"
+          keystore="$RUNNER_TEMP/signing.jks"
+          trap 'rm -f "$keystore" "$RUNNER_TEMP/aligned.apk"' EXIT
+          printf '%s' "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          zipalign -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          apksigner sign --ks "$keystore" --ks-key-alias "$SIGNING_KEY_ALIAS"             --ks-pass env:SIGNING_KEYSTORE_PASSWORD --key-pass env:SIGNING_KEY_PASSWORD             --out "adbhelper-${GITHUB_REF_NAME}.apk" "$RUNNER_TEMP/aligned.apk"
           apksigner verify --verbose "adbhelper-${GITHUB_REF_NAME}.apk"
 
       - uses: actions/upload-artifact@v4
