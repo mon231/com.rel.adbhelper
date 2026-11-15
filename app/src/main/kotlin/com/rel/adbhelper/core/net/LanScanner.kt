@@ -11,9 +11,8 @@ import java.net.Socket
 
 /**
  * The LAN "auto search": a parallel TCP connect sweep of the device's own /24 subnet for
- * hosts with the adb TCP port (5555) open. mDNS is deliberately not used (plan ruling).
- * `shortcut: only port 5555 is probed — wireless-debugging targets on random ports are
- * found by pairing/manual entry instead — upgrade when mDNS discovery is worth the code.`
+ * hosts with the adb TCP port (5555) open. Wireless-debugging targets on random ports are
+ * found separately by [MdnsDiscovery], which the Connect screen runs alongside this sweep.
  */
 object LanScanner {
 

@@ -34,6 +34,12 @@ import com.rel.adbhelper.core.adb.AdbKeyConnectionManager
 import com.rel.adbhelper.core.adb.AdbResult
 import com.rel.adbhelper.core.adb.NetworkAdbTransport
 import com.rel.adbhelper.core.net.LanScanner
+import com.rel.adbhelper.core.net.MdnsServiceTypes
+import com.rel.adbhelper.core.net.NsdMdnsDiscovery
+import com.rel.adbhelper.core.net.mergeScanResults
+import com.rel.adbhelper.core.net.pairingPrefill
+import androidx.compose.runtime.DisposableEffect
+import kotlinx.coroutines.delay
 import com.rel.adbhelper.core.recents.RecentConnections
 import com.rel.adbhelper.core.session.DeviceSession
 import com.rel.adbhelper.ui.components.SignalMark
@@ -52,6 +58,9 @@ private const val SCAN_VERIFY_TIMEOUT_MILLIS = 3_000L
  * this is purely a "don't open 20 sockets at the exact same instant" cap, not a correctness
  * requirement the way serializing the app's single real connection is. */
 private const val SCAN_VERIFY_CONCURRENCY = 5
+
+/** Minimum time mDNS discovery keeps listening during a scan. */
+private const val MDNS_WINDOW_MILLIS = 5_000L
 
 @Composable
 fun ConnectScreen(
@@ -144,15 +153,33 @@ fun ConnectScreen(
                 scope.launch {
                     scanning = true
                     scanResults = emptyList()
-                    val subnet = localSubnet(context.applicationContext)
-                    val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet)
-                    verifyScanCandidates(
-                        candidates = candidates,
-                        concurrency = SCAN_VERIFY_CONCURRENCY,
-                        verify = { host, port -> canReallyAdbConnect(context.applicationContext, host, port) },
-                        onFound = { target -> scanResults = (scanResults.orEmpty() + target).sorted() },
-                    )
-                    scanning = false
+                    // mDNS finds wireless-debugging targets on their random ports, which the
+                    // port-5555 sweep cannot. Callbacks arrive off the main thread, so hop to
+                    // this (main) scope before touching Compose state.
+                    val started = System.currentTimeMillis()
+                    val mdns = listOf(MdnsServiceTypes.CONNECT, MdnsServiceTypes.ADB).map {
+                        type -> type to NsdMdnsDiscovery(context.applicationContext)
+                    }
+                    try {
+                        mdns.forEach { (type, discovery) ->
+                            discovery.start(type) { target ->
+                                scope.launch { scanResults = mergeScanResults(scanResults.orEmpty(), listOf(target)) }
+                            }
+                        }
+                        val subnet = localSubnet(context.applicationContext)
+                        val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet)
+                        verifyScanCandidates(
+                            candidates = candidates,
+                            concurrency = SCAN_VERIFY_CONCURRENCY,
+                            verify = { host, port -> canReallyAdbConnect(context.applicationContext, host, port) },
+                            onFound = { target -> scanResults = mergeScanResults(scanResults.orEmpty(), listOf(target)) },
+                        )
+                        delay(MDNS_WINDOW_MILLIS - (System.currentTimeMillis() - started))
+                    } finally {
+                        // Also runs when the screen leaves composition and cancels this scope.
+                        mdns.forEach { (_, discovery) -> discovery.stop() }
+                        scanning = false
+                    }
                 }
             }) { Text("Scan") }
             TextButton(onClick = { pairDialog = true }) { Text("Pair") }
@@ -254,6 +281,19 @@ private fun PairDialog(onDismiss: () -> Unit) {
     var code by rememberSaveable { mutableStateOf("") }
     var status by rememberSaveable { mutableStateOf("") }
     var pairing by remember { mutableStateOf(false) }
+    var found by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // Look for the phone's pairing service while the dialog is open; stop when it closes.
+    DisposableEffect(Unit) {
+        val discovery = NsdMdnsDiscovery(context.applicationContext)
+        discovery.start(MdnsServiceTypes.PAIRING) { target ->
+            scope.launch { // main thread; the callback arrives on a binder thread
+                found = mergeScanResults(found, listOf(target))
+                pairingPrefill(found, address)?.let { address = it }
+            }
+        }
+        onDispose { discovery.stop() }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
