@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 internal const val MIN_DENSITY = 72
@@ -39,31 +40,31 @@ class PowerViewModel(
     }
 
     fun setDensityInput(text: String) {
-        _state.value = _state.value.copy(densityInput = text)
+        _state.update { it.copy(densityInput = text) }
     }
 
     fun applyDensity() {
         val dpi = _state.value.densityInput.toIntOrNull() ?: return
         // Far-out values (`wm density 5`) leave a target that cannot be operated by touch.
         if (dpi !in MIN_DENSITY..MAX_DENSITY) {
-            _state.value = _state.value.copy(message = "Density must be between $MIN_DENSITY and $MAX_DENSITY")
+            _state.update { it.copy(message = "Density must be between $MIN_DENSITY and $MAX_DENSITY") }
             return
         }
         scope.launch {
             val result = client.shell(PowerCommands.setDpi(dpi))
-            _state.value = _state.value.copy(
+            _state.update { it.copy(
                 message = if (result is AdbResult.Success) "Density set to $dpi" else "Failed to change DPI",
-                currentDensity = if (result is AdbResult.Success) dpi else _state.value.currentDensity,
-            )
+                currentDensity = if (result is AdbResult.Success) dpi else it.currentDensity,
+            ) }
         }
     }
 
     fun resetDensity() {
         scope.launch {
             val result = client.shell(PowerCommands.resetDpi())
-            _state.value = _state.value.copy(
+            _state.update { it.copy(
                 message = if (result is AdbResult.Success) "Density reset" else "Failed to change DPI",
-            )
+            ) }
             load()
         }
     }
@@ -75,10 +76,10 @@ class PowerViewModel(
      */
     private fun run(command: String, successMessage: String, cutsLink: Boolean = false, onDone: () -> Unit = {}) {
         scope.launch {
-            if (cutsLink) _state.value = _state.value.copy(message = successMessage)
+            if (cutsLink) _state.update { it.copy(message = successMessage) }
             val result = client.shell(command)
             val succeeded = if (cutsLink) !result.isRejection() else result is AdbResult.Success
-            _state.value = _state.value.copy(message = if (succeeded) successMessage else "Command failed")
+            _state.update { it.copy(message = if (succeeded) successMessage else "Command failed") }
             onDone()
         }
     }

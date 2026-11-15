@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
@@ -59,16 +60,16 @@ class DeviceInfoViewModel(
 
     fun screenshot(context: Context) {
         scope.launch {
-            _state.value = _state.value.copy(message = "Capturing screenshot…")
+            _state.update { it.copy(message = "Capturing screenshot…") }
             try {
                 val bytes = client.raw("exec:screencap -p")
                 if (!isCompletePng(bytes)) throw java.io.IOException("incomplete screenshot")
                 val dir = context.getExternalFilesDir("Screenshots") ?: context.filesDir
                 val file = java.io.File(dir, "adbhelper-${System.currentTimeMillis()}.png")
                 file.writeBytes(bytes)
-                _state.value = _state.value.copy(message = "Screenshot saved to ${file.absolutePath}")
+                _state.update { it.copy(message = "Screenshot saved to ${file.absolutePath}") }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Failed to capture screenshot")
+                _state.update { it.copy(message = "Failed to capture screenshot") }
             }
         }
     }

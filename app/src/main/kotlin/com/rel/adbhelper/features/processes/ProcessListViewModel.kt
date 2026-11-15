@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class ProcessListViewModel(
@@ -38,13 +39,13 @@ class ProcessListViewModel(
     fun kill(entry: ProcessEntry) {
         scope.launch {
             val result = client.shell("kill ${entry.pid}")
-            _state.value = _state.value.copy(
+            _state.update { it.copy(
                 message = if (result is com.rel.adbhelper.core.adb.AdbResult.Success) {
                     "Killed ${entry.name}"
                 } else {
                     "Failed to kill process"
                 },
-            )
+            ) }
             load()
         }
     }

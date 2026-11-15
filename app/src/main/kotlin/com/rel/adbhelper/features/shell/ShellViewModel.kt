@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -50,7 +51,7 @@ class ShellViewModel(
                     return@launch
                 }
                 stream = opened
-                _state.value = _state.value.copy(connected = true, message = "")
+                _state.update { it.copy(connected = true, message = "") }
                 reader = scope.launch {
                     // A forced close (see restart's doc) makes a blocked readChunk() throw
                     // IOException("Stream closed.") rather than respond to plain coroutine
@@ -67,10 +68,10 @@ class ShellViewModel(
                     try {
                         while (true) {
                             val chunk = opened.readChunk() ?: break
-                            _state.value = _state.value.copy(
-                                output = (_state.value.output + chunk.toString(Charsets.UTF_8))
+                            _state.update { it.copy(
+                                output = (it.output + chunk.toString(Charsets.UTF_8))
                                     .takeLast(MAX_OUTPUT_ENTRIES),
-                            )
+                            ) }
                         }
                         endSession(opened)
                     } catch (c: kotlinx.coroutines.CancellationException) {
@@ -80,7 +81,7 @@ class ShellViewModel(
                     }
                 }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(connected = false, message = "Could not open shell")
+                _state.update { it.copy(connected = false, message = "Could not open shell") }
                 stream = null
             }
         }
@@ -91,7 +92,7 @@ class ShellViewModel(
         synchronized(this) {
             if (stream !== ended) return
             stream = null
-            _state.value = _state.value.copy(connected = false, message = "Shell session ended")
+            _state.update { it.copy(connected = false, message = "Shell session ended") }
         }
     }
 
@@ -105,13 +106,13 @@ class ShellViewModel(
             } catch (c: kotlinx.coroutines.CancellationException) {
                 throw c
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(connected = false, message = "Shell session ended")
+                _state.update { it.copy(connected = false, message = "Shell session ended") }
             }
         }
     }
 
     fun clear() {
-        _state.value = _state.value.copy(output = emptyList())
+        _state.update { it.copy(output = emptyList()) }
     }
 
     /**
@@ -129,7 +130,7 @@ class ShellViewModel(
             old?.close()
             reader?.cancel()
             reader = null
-            _state.value = _state.value.copy(output = emptyList(), connected = false, message = "")
+            _state.update { it.copy(output = emptyList(), connected = false, message = "") }
             start()
         }
     }
@@ -150,9 +151,9 @@ class ShellViewModel(
      * so only the target actually rejecting the command counts as failure. */
     fun restartAdbServer() {
         scope.launch {
-            _state.value = _state.value.copy(message = "adb server restart requested")
+            _state.update { it.copy(message = "adb server restart requested") }
             if (client.shell("setprop ctl.restart adbd").isRejection()) {
-                _state.value = _state.value.copy(message = "Failed to restart adb server (needs root on the target)")
+                _state.update { it.copy(message = "Failed to restart adb server (needs root on the target)") }
             }
         }
     }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class FilesViewModel(
@@ -32,7 +33,7 @@ class FilesViewModel(
      * directory, its info dialog is shown instead of a listing error. */
     fun open(path: String, link: FileEntry? = null) {
         scope.launch {
-            _state.value = _state.value.copy(loading = true, message = "")
+            _state.update { it.copy(loading = true, message = "") }
             try {
                 // `ls -la <dir>` on a symlink lists the link itself, so always list with a
                 // trailing slash to follow it (e.g. /sdcard -> /storage/self/primary). The root
@@ -41,19 +42,21 @@ class FilesViewModel(
                 val raw = client.shell("ls -la ${shellQuote("${dir.trimEnd('/')}/")}").let { result ->
                     if (result is com.rel.adbhelper.core.adb.AdbResult.Success) result.output else null
                 } ?: throw IllegalStateException("ls failed")
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     path = dir,
                     entries = parseLsLa(raw, dir),
                     loading = false,
-                )
+                ) }
             } catch (t: Throwable) {
-                _state.value = if (link != null) {
-                    _state.value.copy(loading = false, selectedForInfo = link)
-                } else {
-                    _state.value.copy(
-                        loading = false,
-                        message = "Failed to list ${path}: ${t.message ?: "unknown error"}",
-                    )
+                _state.update {
+                    if (link != null) {
+                        it.copy(loading = false, selectedForInfo = link)
+                    } else {
+                        it.copy(
+                            loading = false,
+                            message = "Failed to list ${path}: ${t.message ?: "unknown error"}",
+                        )
+                    }
                 }
             }
         }
@@ -66,7 +69,7 @@ class FilesViewModel(
     }
 
     fun toggleHidden() {
-        _state.value = _state.value.copy(showHidden = !_state.value.showHidden)
+        _state.update { it.copy(showHidden = !it.showHidden) }
     }
 
     fun entryClick(entry: FileEntry) {
@@ -77,12 +80,12 @@ class FilesViewModel(
         } else if (entry.isDir) {
             open(entry.path)
         } else {
-            _state.value = _state.value.copy(selectedForInfo = entry)
+            _state.update { it.copy(selectedForInfo = entry) }
         }
     }
 
     fun dismissInfo() {
-        _state.value = _state.value.copy(selectedForInfo = null)
+        _state.update { it.copy(selectedForInfo = null) }
     }
 
     fun createFolder(name: String) = runCommand("mkdir -p ${shellQuote(join(name))}", "Folder created")
@@ -92,22 +95,22 @@ class FilesViewModel(
     fun delete(entry: FileEntry) =
         runCommand("rm -rf ${shellQuote(entry.path)}", "Deleted")
     fun copy(entry: FileEntry) {
-        _state.value = _state.value.copy(copiedFrom = entry.path, message = "Copied ${entry.name} — open the destination and paste")
+        _state.update { it.copy(copiedFrom = entry.path, message = "Copied ${entry.name} — open the destination and paste") }
     }
     fun paste() {
         val from = _state.value.copiedFrom ?: return
         runCommand("cp -r ${shellQuote(from)} ${shellQuote(_state.value.path)}", "Pasted")
-        _state.value = _state.value.copy(copiedFrom = null)
+        _state.update { it.copy(copiedFrom = null) }
     }
 
     fun upload(path: String, bytes: ByteArray) {
         scope.launch {
             try {
                 client.push(path, bytes)
-                _state.value = _state.value.copy(message = "Uploaded ${path.substringAfterLast('/')}")
+                _state.update { it.copy(message = "Uploaded ${path.substringAfterLast('/')}") }
                 open(_state.value.path)
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Upload failed")
+                _state.update { it.copy(message = "Upload failed") }
             }
         }
     }
@@ -122,10 +125,10 @@ class FilesViewModel(
                 file.outputStream().use { out ->
                     client.pullTo(entry.path) { chunk -> out.write(chunk) }
                 }
-                _state.value = _state.value.copy(message = "Downloaded to ${file.absolutePath}")
+                _state.update { it.copy(message = "Downloaded to ${file.absolutePath}") }
             } catch (t: Throwable) {
                 file.delete()
-                _state.value = _state.value.copy(message = "Download failed")
+                _state.update { it.copy(message = "Download failed") }
             }
         }
     }
@@ -137,12 +140,12 @@ class FilesViewModel(
             try {
                 val result = client.shell(command)
                 if (result is com.rel.adbhelper.core.adb.AdbResult.Success) {
-                    _state.value = _state.value.copy(message = successMessage)
+                    _state.update { it.copy(message = successMessage) }
                 } else {
-                    _state.value = _state.value.copy(message = "Command failed")
+                    _state.update { it.copy(message = "Command failed") }
                 }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Connection to the device was lost")
+                _state.update { it.copy(message = "Connection to the device was lost") }
             }
             open(_state.value.path)
         }

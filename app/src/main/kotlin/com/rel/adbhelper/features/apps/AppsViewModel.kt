@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class AppsViewModel(
@@ -35,7 +36,7 @@ class AppsViewModel(
 
     fun load() {
         scope.launch {
-            _state.value = _state.value.copy(loading = true)
+            _state.update { it.copy(loading = true) }
             try {
                 // Sequential, not concurrent — live-reproduced: three shell() calls fired at once
                 // over this app's one shared multiplexed connection intermittently force-closed
@@ -53,33 +54,33 @@ class AppsViewModel(
                 val apps = (thirdParty + system)
                     .map { AppEntry(pkg = it, isSystem = it !in thirdParty, isEnabled = it !in disabled) }
                     .sortedBy { it.pkg }
-                _state.value = _state.value.copy(loading = false, apps = apps)
+                _state.update { it.copy(loading = false, apps = apps) }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     loading = false,
                     message = t.message ?: "Connection to the device was lost",
-                )
+                ) }
             }
         }
     }
 
     fun setFilter(filter: Filter) {
-        _state.value = _state.value.copy(filter = filter)
+        _state.update { it.copy(filter = filter) }
     }
 
     fun details(entry: AppEntry) {
         scope.launch {
             try {
                 val raw = client.shell("dumpsys package ${shellQuote(entry.pkg)}").outputOrThrow()
-                _state.value = _state.value.copy(details = entry to parseDumpsysPackage(raw))
+                _state.update { it.copy(details = entry to parseDumpsysPackage(raw)) }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = t.message ?: "Failed to read app details")
+                _state.update { it.copy(message = t.message ?: "Failed to read app details") }
             }
         }
     }
 
     fun dismissDetails() {
-        _state.value = _state.value.copy(details = null)
+        _state.update { it.copy(details = null) }
     }
 
     fun setEnabled(entry: AppEntry, enabled: Boolean) {
@@ -97,21 +98,21 @@ class AppsViewModel(
         scope.launch {
             val root = client.shell("su -c id") is AdbResult.Success
             if (!root) {
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     message = "This action needs root access on this device, which isn't available.",
-                )
+                ) }
             } else {
                 val result = client.shell("su -c pm grant ${shellQuote(entry.pkg)} android.permission.WRITE_SECURE_SETTINGS")
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     message = if (result is AdbResult.Success) "Activated ${entry.pkg}" else "Activation failed",
-                )
+                ) }
             }
         }
     }
 
     fun install(bytes: ByteArray, name: String) {
         scope.launch {
-            _state.value = _state.value.copy(busy = "Installing $name…")
+            _state.update { it.copy(busy = "Installing $name…") }
             try {
                 val tempPath = "/data/local/tmp/adbhelper-install.apk"
                 client.push(tempPath, bytes)
@@ -119,12 +120,12 @@ class AppsViewModel(
                 // longer than the default per-read timeout.
                 val result = client.shell("pm install -r ${shellQuote(tempPath)}", timeoutMillis = INSTALL_TIMEOUT_MILLIS)
                 client.shell("rm ${shellQuote(tempPath)}")
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     busy = if (result is AdbResult.Success) "Installed $name" else "Install failed",
-                )
+                ) }
                 load()
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(busy = "Install failed")
+                _state.update { it.copy(busy = "Install failed") }
             }
         }
     }
@@ -133,15 +134,15 @@ class AppsViewModel(
         scope.launch {
             try {
                 val result = client.shell(command)
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     message = when (result) {
                         is AdbResult.Success -> successMessage
                         is AdbResult.CommandFailed -> result.message
                         is AdbResult.TransportUnreachable -> "Connection to the device was lost"
                     },
-                )
+                ) }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Connection to the device was lost")
+                _state.update { it.copy(message = "Connection to the device was lost") }
             }
             load()
         }
