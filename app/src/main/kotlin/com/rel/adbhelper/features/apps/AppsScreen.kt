@@ -48,17 +48,16 @@ fun AppsScreen(modifier: Modifier = Modifier) {
 
     val installLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            // Off the main thread: a large APK read here froze the UI (or ANR'd) while it loaded.
+            // Off the main thread: the name query can hit a remote provider. The APK itself is
+            // streamed by the view model, never read into memory here.
             ioScope.launch {
-                val picked = withContext(Dispatchers.IO) {
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    val name = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val name = withContext(Dispatchers.IO) {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                         val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                         if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
                     } ?: "app.apk"
-                    bytes?.let { it to name }
                 }
-                if (picked != null) viewModel.install(picked.first, picked.second)
+                viewModel.install(name) { runCatching { context.contentResolver.openInputStream(uri) }.getOrNull() }
             }
         }
     }

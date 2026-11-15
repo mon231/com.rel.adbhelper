@@ -59,13 +59,13 @@ fun FilesScreen(modifier: Modifier = Modifier) {
     val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: android.net.Uri? ->
         if (uri != null) {
             val dir = state.path.trimEnd('/')
-            // Off the main thread: the picked file can be arbitrarily large (or remote).
+            // Off the main thread: the name query can hit a remote provider. The file itself is
+            // streamed by the view model, never read into memory here.
             uploadScope.launch {
-                val (name, bytes) = withContext(Dispatchers.IO) {
-                    queryDisplayName(context, uri) to
-                        runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                val name = withContext(Dispatchers.IO) { queryDisplayName(context, uri) }
+                viewModel.upload("$dir/${name ?: "upload.bin"}") {
+                    runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
                 }
-                if (bytes != null) viewModel.upload("$dir/${name ?: "upload.bin"}", bytes)
             }
         }
     }

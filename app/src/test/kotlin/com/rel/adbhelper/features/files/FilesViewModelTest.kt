@@ -108,4 +108,30 @@ class FilesViewModelTest {
         assertEquals("/", vm.state.value.path)
         assertTrue(shellService("ls -la '/'") in transport.closedServices, "ran: ${transport.closedServices}")
     }
+
+    @Test
+    fun `upload streams the picked file to the target`() {
+        // Real dispatcher: the stream is opened and read on Dispatchers.IO, which virtual time
+        // cannot advance.
+        val transport = FakeAdbTransport()
+        val vm = FilesViewModel(client(transport), scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined))
+
+        vm.upload("/sdcard/a.bin") { java.io.ByteArrayInputStream(byteArrayOf(1, 2, 3)) }
+        val deadline = System.currentTimeMillis() + 5_000
+        // The listing that follows a successful upload is the sign it finished.
+        while (transport.closedServices.none { it.startsWith("shell:ls") } && System.currentTimeMillis() < deadline) Thread.sleep(10)
+
+        assertEquals(listOf(3), transport.writtenByService["exec:cat > '/sdcard/a.bin'"].orEmpty().map { it.size })
+    }
+
+    @Test
+    fun `upload reports a file that cannot be opened`() {
+        val vm = FilesViewModel(client(FakeAdbTransport()), scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined))
+
+        vm.upload("/sdcard/a.bin") { null }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (vm.state.value.message.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+
+        assertEquals("Could not read the selected file", vm.state.value.message)
+    }
 }

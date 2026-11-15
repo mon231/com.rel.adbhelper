@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.io.InputStream
 
 class AppsViewModel(
     private val client: AdbClient,
@@ -110,12 +113,16 @@ class AppsViewModel(
         }
     }
 
-    fun install(bytes: ByteArray, name: String) {
+    /** [open] supplies the picked APK's stream (null when it cannot be read); it is opened and
+     * read on [Dispatchers.IO] and streamed to the target, never loaded into memory whole. */
+    fun install(name: String, open: () -> InputStream?) {
         scope.launch {
             _state.update { it.copy(busy = "Installing $name…") }
             try {
                 val tempPath = "/data/local/tmp/adbhelper-install.apk"
-                client.push(tempPath, bytes)
+                val input = withContext(Dispatchers.IO) { open() }
+                    ?: throw IOException("Could not read the selected file")
+                input.use { client.push(tempPath, it) }
                 // pm install prints nothing until it finishes, which for a large APK is far
                 // longer than the default per-read timeout.
                 val result = client.shell("pm install -r ${shellQuote(tempPath)}", timeoutMillis = INSTALL_TIMEOUT_MILLIS)

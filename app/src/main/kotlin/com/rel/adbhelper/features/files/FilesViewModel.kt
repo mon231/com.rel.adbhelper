@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.InputStream
 
 class FilesViewModel(
     private val client: AdbClient,
@@ -103,10 +105,17 @@ class FilesViewModel(
         _state.update { it.copy(copiedFrom = null) }
     }
 
-    fun upload(path: String, bytes: ByteArray) {
+    /** [open] supplies the picked file's stream (null when it cannot be read); it is opened and
+     * read on [Dispatchers.IO] and streamed to the target, never loaded into memory whole. */
+    fun upload(path: String, open: () -> InputStream?) {
         scope.launch {
             try {
-                client.push(path, bytes)
+                val input = withContext(Dispatchers.IO) { open() }
+                if (input == null) {
+                    _state.update { it.copy(message = "Could not read the selected file") }
+                    return@launch
+                }
+                input.use { client.push(path, it) }
                 _state.update { it.copy(message = "Uploaded ${path.substringAfterLast('/')}") }
                 open(_state.value.path)
             } catch (t: Throwable) {

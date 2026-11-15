@@ -9,8 +9,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.io.ByteArrayInputStream
 import java.io.IOException
+import java.io.InputStream
 
 /**
  * Marker appended to every shell command's output so [shell] can recover the remote exit code.
@@ -173,27 +176,43 @@ class AdbClient(
     }
 
     /**
-     * Streams [data] onto the target's [path] via `exec:cat >`, one [chunkSize]-sized write at
-     * a time. Each write (and the initial open) is individually timeout-bounded, not the whole
+     * Streams [input] onto the target's [path] via `exec:cat >`, one [chunkSize]-sized write at
+     * a time — only one chunk is ever held in memory, so a file far larger than the heap can be
+     * uploaded. Each write (and the initial open) is individually timeout-bounded, not the whole
      * transfer — a large file legitimately taking minutes isn't penalized the way one
      * whole-operation timeout would, while a connection that goes quiet mid-transfer still gets
      * caught within [COMMAND_TIMEOUT_MILLIS] of its last successful write.
      *
+     * [input] is read on [Dispatchers.IO] (it is blocking I/O, e.g. a content resolver stream)
+     * and is not closed here; the caller owns it.
+     *
      * `cat >` reports nothing back over this stream, so a write the target refused (read-only
      * directory, no space left) looked identical to a successful one — the file's size on the
-     * target is checked afterwards and a mismatch thrown. Retried briefly because closing the
-     * stream doesn't wait for the remote `cat` to finish flushing what it already received.
+     * target is checked afterwards against the number of bytes actually sent, and a mismatch
+     * thrown. Retried briefly because closing the stream doesn't wait for the remote `cat` to
+     * finish flushing what it already received.
      */
-    suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
+    suspend fun push(path: String, input: InputStream, chunkSize: Int = 256 * 1024): Unit = try {
         val stream = openWithTimeout("exec:cat > ${shellQuote(path)}")
+        var sent = 0L
         try {
-            var offset = 0
-            while (offset < data.size) {
-                val chunk = data.copyOfRange(offset, minOf(offset + chunkSize, data.size))
+            val buffer = ByteArray(chunkSize)
+            while (true) {
+                val filled = withContext(Dispatchers.IO) {
+                    var n = 0
+                    while (n < buffer.size) {
+                        val read = input.read(buffer, n, buffer.size - n)
+                        if (read < 0) break
+                        n += read
+                    }
+                    n
+                }
+                if (filled == 0) break
+                val chunk = buffer.copyOf(filled)
                 stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
                     write(chunk)
                 }
-                offset += chunk.size
+                sent += filled
             }
         } finally {
             stream.close()
@@ -201,9 +220,9 @@ class AdbClient(
         var attempt = 1
         while (true) {
             val remoteSize = shell("stat -c %s ${shellQuote(path)}").outputOrThrow().trim()
-            if (remoteSize == data.size.toString()) break
+            if (remoteSize == sent.toString()) break
             if (attempt++ == PUSH_VERIFY_ATTEMPTS) {
-                throw IOException("wrote ${data.size} bytes but the target has $remoteSize")
+                throw IOException("wrote $sent bytes but the target has $remoteSize")
             }
             delay(PUSH_VERIFY_RETRY_MILLIS)
         }
@@ -212,6 +231,10 @@ class AdbClient(
     } catch (t: Throwable) {
         throw IOException("failed to write to $path", t)
     }
+
+    /** In-memory convenience over the streaming [push], for payloads already in memory. */
+    suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024) =
+        push(path, ByteArrayInputStream(data), chunkSize)
 
     /**
      * Reads a file off the target via `exec:cat`, one chunk at a time into [sink] — never holds

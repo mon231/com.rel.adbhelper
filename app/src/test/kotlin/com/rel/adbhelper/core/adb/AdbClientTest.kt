@@ -216,6 +216,35 @@ class AdbClientTest {
     }
 
     @Test
+    fun `push from a stream writes it chunk by chunk and verifies the byte count it sent`() = runTest {
+        val payload = ByteArray(10) { it.toByte() }
+        // Hands out at most 3 bytes per read, like a real network/content stream.
+        val trickle = object : java.io.InputStream() {
+            private val source = java.io.ByteArrayInputStream(payload)
+            override fun read(): Int = source.read()
+            override fun read(b: ByteArray, off: Int, len: Int): Int = source.read(b, off, minOf(len, 3))
+        }
+        val transport = FakeAdbTransport()
+
+        client(transport).push("/data/local/tmp/x", trickle, chunkSize = 4)
+
+        val written = transport.writtenByService["exec:cat > '/data/local/tmp/x'"].orEmpty()
+        assertEquals(listOf(4, 4, 2), written.map { it.size })
+        assertTrue(payload.contentEquals(written.reduce { a, b -> a + b }))
+    }
+
+    @Test
+    fun `push from a stream fails when the target reports a different size than was sent`() = runTest {
+        var failure: IOException? = null
+        try {
+            client(FakeAdbTransport(statOutput = "9")).push("/x", java.io.ByteArrayInputStream(ByteArray(10)), chunkSize = 4)
+        } catch (e: IOException) {
+            failure = e
+        }
+        assertTrue(failure != null, "expected push to throw on a size mismatch")
+    }
+
+    @Test
     fun `push fails when the target's file size does not match what was written`() = runTest {
         // `cat > path` into a read-only directory fails on the target only — every write and the
         // close on this side still succeed, so push used to report success for a file that was

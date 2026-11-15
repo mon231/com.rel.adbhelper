@@ -81,4 +81,20 @@ class AppsViewModelTest {
             "expected the real failure reason in the message, got '${vm.state.value.message}'",
         )
     }
+
+    @Test
+    fun `install streams the apk to the target and runs pm install`() {
+        val transport = FakeAdbTransport()
+        val vm = AppsViewModel(client(transport), scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined))
+
+        vm.install("app.apk") { java.io.ByteArrayInputStream(byteArrayOf(1, 2, 3, 4)) }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!vm.state.value.busy.startsWith("Install") || vm.state.value.busy.startsWith("Installing")) {
+            if (System.currentTimeMillis() > deadline) break
+            Thread.sleep(10)
+        }
+
+        assertEquals("Installed app.apk", vm.state.value.busy)
+        assertEquals(listOf(4), transport.writtenByService["exec:cat > '/data/local/tmp/adbhelper-install.apk'"].orEmpty().map { it.size })
+    }
 }
