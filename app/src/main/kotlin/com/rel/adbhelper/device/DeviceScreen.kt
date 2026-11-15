@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -28,12 +29,22 @@ import com.rel.adbhelper.features.power.PowerScreen
 import com.rel.adbhelper.features.processes.ProcessListScreen
 import com.rel.adbhelper.features.shell.ShellScreen
 
-private val TAB_TITLES = listOf("Info", "Apps", "Files", "Shell", "Power", "Monitor", "Mirror")
+/** Title and content together, so the tab row and what it shows cannot drift apart. */
+private val TABS: List<Pair<String, @Composable () -> Unit>> = listOf(
+    "Info" to { InfoScreen() },
+    "Apps" to { AppsScreen() },
+    "Files" to { FilesScreen() },
+    "Shell" to { ShellScreen() },
+    "Processes" to { ProcessListScreen() },
+    "Power" to { PowerScreen() },
+    "Monitor" to { LiveScreenScreen() },
+    "Mirror" to { MirrorScreen() },
+)
 
 /** Hub screen shown once a target is connected; one tab per feature.
  *
  * [ScrollableTabRow], not the fixed [androidx.compose.material3.TabRow]: a fixed tab row divides
- * the screen width evenly across all tabs, and seven labels ("Monitor", "Mirror", …) don't fit
+ * the screen width evenly across all tabs, and eight labels ("Monitor", "Mirror", …) don't fit
  * un-clipped at that width on a phone-width screen — this scrolls instead of squeezing/clipping
  * labels.
  */
@@ -50,7 +61,7 @@ fun DeviceScreen(modifier: Modifier = Modifier) {
 
     Column(modifier = modifier.fillMaxSize()) {
         ScrollableTabRow(selectedTabIndex = selected, edgePadding = 16.dp) {
-            TAB_TITLES.forEachIndexed { index, title ->
+            TABS.forEachIndexed { index, (title, _) ->
                 Tab(
                     selected = selected == index,
                     onClick = { selected = index },
@@ -58,15 +69,9 @@ fun DeviceScreen(modifier: Modifier = Modifier) {
                 )
             }
         }
-        when (selected) {
-            0 -> InfoScreen()
-            1 -> AppsScreen()
-            2 -> FilesScreen()
-            3 -> ShellScreen()
-            4 -> PowerScreen()
-            5 -> LiveScreenScreen()
-            6 -> MirrorScreen()
-        }
+        // key: each tab gets its own composition, so one tab's remembered state is never reused
+        // by another and leaving a tab disposes it.
+        key(selected) { TABS[selected].second() }
     }
 }
 
