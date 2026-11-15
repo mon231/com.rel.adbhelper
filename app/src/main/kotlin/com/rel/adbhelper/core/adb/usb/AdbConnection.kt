@@ -12,7 +12,9 @@ import kotlin.concurrent.withLock
 
 /**
  * The raw byte pipe an [AdbConnection] runs over. All methods block; [close] may be called from
- * any thread and must make a [read] or [write] blocked on another thread fail.
+ * any thread and must make a [read] or [write] blocked on another thread fail. Once [close] has
+ * been called, every later [read] and [write] throws [IOException]: that is how a reader loop
+ * learns the channel is gone.
  */
 interface AdbPacketChannel {
     /** Sends all of [bytes] as one transfer. The header and the payload of a packet are passed
@@ -21,7 +23,9 @@ interface AdbPacketChannel {
     fun write(bytes: ByteArray)
 
     /** Blocks until some data arrives, stores at most [length] bytes at [offset] and returns
-     * how many (0 is allowed and means "nothing this time"). Never returns a negative number. */
+     * how many. Returning 0 is allowed and means "nothing this time" (a read timeout, or an
+     * empty packet): callers just read again. Never returns a negative number; throws once the
+     * channel is closed. */
     @Throws(IOException::class)
     fun read(buffer: ByteArray, offset: Int, length: Int): Int
 
@@ -257,21 +261,11 @@ class AdbConnection private constructor(
 
         private fun readFully(channel: AdbPacketChannel, buffer: ByteArray) {
             var offset = 0
-            var emptyReads = 0
-            while (offset < buffer.size) {
-                val count = channel.read(buffer, offset, buffer.size - offset)
-                if (count > 0) {
-                    offset += count
-                    emptyReads = 0
-                } else if (++emptyReads > MAX_CONSECUTIVE_EMPTY_READS) {
-                    // A few empty reads are legitimate (zero-length packets); an endless run of
-                    // them would otherwise spin this thread forever.
-                    throw IOException("ADB channel keeps returning no data")
-                }
-            }
+            // A read that returns 0 only means "nothing arrived within the channel's read
+            // timeout" (or a zero-length packet), which is routine on an idle connection. The
+            // loop ends when the channel delivers the bytes or, once it has been closed, throws.
+            while (offset < buffer.size) offset += channel.read(buffer, offset, buffer.size - offset)
         }
-
-        private const val MAX_CONSECUTIVE_EMPTY_READS = 1000
     }
 }
 
