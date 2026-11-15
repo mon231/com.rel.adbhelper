@@ -17,10 +17,10 @@ import java.io.IOException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicInteger
 
-private object Eof
+internal object Eof
 
 /** A stream fed by the test. Reads block for real; only [close] (or end of data) ends them, like the library's. */
-private class QueueStream(vararg initial: ByteArray) : AdbStream {
+internal class QueueStream(vararg initial: ByteArray) : AdbStream {
     private val queue = LinkedBlockingQueue<Any>()
     val closeCount = AtomicInteger()
     val written = mutableListOf<ByteArray>()
@@ -44,7 +44,7 @@ private class QueueStream(vararg initial: ByteArray) : AdbStream {
 }
 
 /** A target scripted per service string. */
-private class ScriptedTransport(
+internal class ScriptedTransport(
     private val scid: Int,
     var remoteJarSize: Long,
     val server: QueueStream,
