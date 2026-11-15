@@ -47,11 +47,11 @@ class AppsViewModel(
                 // opens — here it's concurrent reads racing on one connection instead. Each read
                 // is still individually fast; the cost of going sequential is one extra round
                 // trip, not three stacked full timeouts.
-                val thirdParty = parsePmList(client.shell("pm list packages -3").outputOrThrow())
+                val thirdParty = parsePmList(client.shell("pm list packages -3").outputOrThrow()).toSet()
                 val system = parsePmList(client.shell("pm list packages -s").outputOrThrow())
                 val disabled = parsePmList(client.shell("pm list packages -d").outputOrThrow()).toSet()
                 val apps = (thirdParty + system)
-                    .map { AppEntry(pkg = it, isSystem = it !in thirdParty.toSet(), isEnabled = it !in disabled) }
+                    .map { AppEntry(pkg = it, isSystem = it !in thirdParty, isEnabled = it !in disabled) }
                     .sortedBy { it.pkg }
                 _state.value = _state.value.copy(loading = false, apps = apps)
             } catch (t: Throwable) {
