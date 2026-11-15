@@ -21,6 +21,9 @@ import java.io.IOException
 private const val EXIT_CODE_MARKER = "__ADBHELPER_EXIT__:"
 private val EXIT_CODE_LINE = Regex("$EXIT_CODE_MARKER(\\d+)\\s*\$")
 
+/** Comfortably longer than the whole marker line (marker, exit code, line ending). */
+private const val EXIT_MARKER_TAIL_BYTES = 64
+
 /** Every one-shot call below is bounded by this — without it, an unresponsive or unreachable
  * target leaves the calling screen on "Loading…"/stuck forever instead of surfacing a failure.
  * [AdbClient.openService] is deliberately excluded: it hands back a long-lived stream (terminal,
@@ -269,11 +272,19 @@ class AdbClient(
         val stream = openWithTimeout("shell:$command; echo $EXIT_CODE_MARKER\$?")
         try {
             val buffer = java.io.ByteArrayOutputStream()
+            // The marker line only ever sits at the very end of the output, so only the last few
+            // bytes received so far are searched per chunk (kept across chunks, since the marker
+            // can arrive split in two) — decoding the whole accumulated output after every chunk
+            // was quadratic on long outputs. The full text is decoded once, when it's found.
+            var tail = ByteArray(0)
             while (true) {
                 val chunk = stream.timingOutOnClose(timeoutMillis, watchdogDispatcher, transport::invalidate) {
                     readChunk()
                 } ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
                 buffer.write(chunk)
+                tail = (tail + chunk.copyOfRange(maxOf(0, chunk.size - EXIT_MARKER_TAIL_BYTES), chunk.size))
+                    .let { it.copyOfRange(maxOf(0, it.size - EXIT_MARKER_TAIL_BYTES), it.size) }
+                if (!EXIT_CODE_LINE.containsMatchIn(String(tail, Charsets.ISO_8859_1))) continue
                 val text = buffer.toString(Charsets.UTF_8.name())
                 val match = EXIT_CODE_LINE.find(text) ?: continue
                 val exitCode = match.groupValues[1].toInt()

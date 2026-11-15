@@ -44,6 +44,15 @@ class AdbClientTest {
     }
 
     @Test
+    fun `shell finds the exit marker after a long output delivered in tiny chunks`() = runTest {
+        // Only the tail of the output is searched per chunk; chunkSize = 1 splits the marker
+        // across as many chunks as it has bytes.
+        val output = "line of output\n".repeat(50)
+        val transport = FakeAdbTransport(scriptedOutput = output, exitCode = 0, chunkSize = 1)
+        assertEquals(AdbResult.Success(output), client(transport).shell("cat big"))
+    }
+
+    @Test
     fun `shell returns CommandFailed when the remote command exits non-zero`() = runTest {
         val transport = FakeAdbTransport(scriptedOutput = "", exitCode = 1)
         val result = client(transport).shell("false")
