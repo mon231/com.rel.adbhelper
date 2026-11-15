@@ -3,11 +3,13 @@ package com.rel.adbhelper.features.shell
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbStream
 import com.rel.adbhelper.core.adb.AdbTransport
+import com.rel.adbhelper.core.adb.FakeAdbTransport
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.withContext
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -63,6 +65,26 @@ private class SingleStreamTransport(private val stream: AdbStream) : AdbTranspor
 }
 
 class ShellViewModelTest {
+
+    @Test
+    fun `output keeps only the newest entries`() {
+        // One byte per chunk: five more chunks than the cap, then the stream ends.
+        val transport = FakeAdbTransport(
+            scriptedOutput = "a".repeat(MAX_OUTPUT_ENTRIES) + "bbbbb",
+            omitExitMarker = true,
+            chunkSize = 1,
+        )
+        val vm = ShellViewModel(
+            AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.start()
+
+        val output = vm.state.value.output
+        assertEquals(MAX_OUTPUT_ENTRIES, output.size)
+        assertEquals(listOf("b", "b", "b", "b", "b"), output.takeLast(5))
+    }
 
     @Test
     fun `restart closes the stream off the calling thread, not inline`() {

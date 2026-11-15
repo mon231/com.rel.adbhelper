@@ -34,7 +34,8 @@ fun ShellScreen(modifier: Modifier = Modifier) {
 
     LaunchedEffect(Unit) { viewModel.start() }
     DisposableEffect(Unit) { onDispose { viewModel.close() } }
-    LaunchedEffect(state.output.size) {
+    // Keyed on the list, not its size: once the output is capped its size stops changing.
+    LaunchedEffect(state.output) {
         if (state.output.isNotEmpty()) listState.scrollToItem(state.output.size - 1)
     }
 

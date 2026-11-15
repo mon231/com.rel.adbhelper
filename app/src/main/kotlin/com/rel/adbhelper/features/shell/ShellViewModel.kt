@@ -12,6 +12,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Newest chunks kept in [ShellViewModel.State.output]; older ones are dropped so a chatty
+ * command (`logcat`) cannot grow the list, which is copied on every chunk, without bound. */
+internal const val MAX_OUTPUT_ENTRIES = 2000
+
 class ShellViewModel(
     private val client: AdbClient,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Unconfined),
@@ -57,7 +61,8 @@ class ShellViewModel(
                         while (true) {
                             val chunk = stream?.readChunk() ?: break
                             _state.value = _state.value.copy(
-                                output = _state.value.output + chunk.toString(Charsets.UTF_8),
+                                output = (_state.value.output + chunk.toString(Charsets.UTF_8))
+                                    .takeLast(MAX_OUTPUT_ENTRIES),
                             )
                         }
                         _state.value = _state.value.copy(connected = false, message = "Shell session ended")
