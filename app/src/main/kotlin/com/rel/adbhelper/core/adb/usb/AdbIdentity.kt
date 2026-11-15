@@ -79,12 +79,15 @@ class RsaAdbIdentity(
             val wordBase = BigInteger.ONE.shiftLeft(32)
             val n0inv = wordBase.subtract(modulus.mod(wordBase).modInverse(wordBase))
             val rSquared = BigInteger.ONE.shiftLeft(2 * MODULUS_BYTES * 8).mod(modulus)
+            // BigInteger.intValueExact needs API 31; the exponent is checked by hand instead.
+            val exponent = key.publicExponent
+            require(exponent.bitLength() <= 31) { "adb needs a public exponent that fits in 32 bits" }
             return ByteBuffer.allocate(ENCODED_KEY_LENGTH).order(ByteOrder.LITTLE_ENDIAN)
                 .putInt(MODULUS_WORDS)
                 .putInt(n0inv.toInt())
                 .put(littleEndian(modulus))
                 .put(littleEndian(rSquared))
-                .putInt(key.publicExponent.intValueExact())
+                .putInt(exponent.toInt())
                 .array()
         }
 
