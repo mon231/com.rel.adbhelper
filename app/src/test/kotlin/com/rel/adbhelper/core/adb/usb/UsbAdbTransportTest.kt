@@ -41,7 +41,8 @@ class UsbAdbTransportTest {
         transports.forEach { it.close() }
     }
 
-    private fun <T> blocking(block: suspend kotlinx.coroutines.CoroutineScope.() -> T): T =
+    // Returns Unit on purpose: a @Test method that returns a value is silently not run by JUnit 5.
+    private fun blocking(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) =
         runBlocking { withTimeout(30_000) { block() } }
 
     /** Plays the device for the connection attempt that [channels] has [index] + 1 entries for. */
