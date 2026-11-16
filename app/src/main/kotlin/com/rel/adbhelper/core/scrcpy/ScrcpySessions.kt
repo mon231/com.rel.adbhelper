@@ -6,6 +6,12 @@ import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbKeyConnectionManager
 import com.rel.adbhelper.core.adb.NetworkAdbTransport
 
+/** The address to dial for a plain network target, or null for one that has its own multiplexing
+ * transport (`usb:…`, and the debug build's `raw:host:port`, which would otherwise parse as
+ * `host:port` too). */
+internal fun networkHostPort(target: String?): Pair<String, Int>? =
+    target?.takeUnless { it.startsWith("usb:") || it.startsWith("raw:") }?.let(::parseHostPort)
+
 /**
  * Builds the production [ScrcpySession] for the attached device.
  *
@@ -16,7 +22,7 @@ import com.rel.adbhelper.core.adb.NetworkAdbTransport
  */
 fun createScrcpySession(context: Context, target: String?, sessionClient: AdbClient): ScrcpySession {
     val app = context.applicationContext
-    val hostPort = target?.let(::parseHostPort)
+    val hostPort = networkHostPort(target)
     return ScrcpySession(
         openLink = {
             if (hostPort == null) {

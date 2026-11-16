@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.rel.adbhelper.BuildConfig
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbKeyConnectionManager
 import com.rel.adbhelper.core.adb.AdbResult
@@ -83,6 +84,7 @@ fun ConnectScreen(
     var scanResults by remember { mutableStateOf<List<String>?>(null) }
     var pairDialog by remember { mutableStateOf(false) }
     var usbDialog by remember { mutableStateOf(false) }
+    var ownStackAddress by remember { mutableStateOf<Pair<String, Int>?>(null) }
 
     // The device hub owns the connected target from here on; detach on leaving it is
     // handled inside DeviceScreen's lifecycle (DisposableEffect) rather than here.
@@ -185,6 +187,12 @@ fun ConnectScreen(
             }) { Text("Scan") }
             TextButton(onClick = { pairDialog = true }) { Text("Pair") }
             TextButton(onClick = { usbDialog = true }) { Text("USB-OTG") }
+            if (BuildConfig.DEBUG) {
+                TextButton(
+                    enabled = parseHostPort(hostPortText) != null,
+                    onClick = { ownStackAddress = parseHostPort(hostPortText) },
+                ) { Text("Own stack (debug)") }
+            }
         }
 
         val scan = scanResults
@@ -253,6 +261,20 @@ fun ConnectScreen(
                 onConnected()
             },
             onDismiss = { usbDialog = false },
+        )
+    }
+    // Debug builds only: the app's own USB protocol stack over TCP, to exercise every tab on an
+    // emulator. Not added to recents.
+    val ownStack = ownStackAddress
+    if (BuildConfig.DEBUG && ownStack != null) {
+        UsbConnectDialog(
+            onConnected = {
+                ownStackAddress = null
+                onConnected()
+            },
+            onDismiss = { ownStackAddress = null },
+            title = "Own stack (debug)",
+            ownStack = ownStack,
         )
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,6 +32,8 @@ import androidx.core.content.IntentCompat
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbKeyConnectionManager
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.usb.AdbPacketChannel
+import com.rel.adbhelper.core.adb.usb.TcpPacketChannel
 import com.rel.adbhelper.core.adb.usb.UsbAdbTransport
 import com.rel.adbhelper.core.adb.usb.UsbPacketChannel
 import com.rel.adbhelper.core.adb.usb.findAdbInterface
@@ -73,13 +76,22 @@ private fun UsbDevice.label(): String = productName?.takeIf { it.isNotBlank() } 
  * attaches the resulting client to [DeviceSession]. [onConnected] is called on success;
  * [onDismiss] when the dialog is closed (Cancel ends whatever is in progress, including a wait
  * for the user to tap Allow on the target).
+ *
+ * With [ownStack] (debug builds' "Own stack" button) it instead connects at once to that
+ * `host` and `port` over plain TCP, through the same USB protocol stack, under [title].
  */
 @Composable
-fun UsbConnectDialog(onConnected: () -> Unit, onDismiss: () -> Unit) {
+fun UsbConnectDialog(
+    onConnected: () -> Unit,
+    onDismiss: () -> Unit,
+    title: String = "USB-OTG",
+    ownStack: Pair<String, Int>? = null,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val flow = remember { UsbConnectFlow(context.applicationContext, scope, onConnected) }
     DisposableEffect(flow) { onDispose { flow.release() } }
+    LaunchedEffect(flow) { if (ownStack != null) flow.connectOwnStack(ownStack.first, ownStack.second) }
 
     val cancel = {
         flow.cancel()
@@ -87,7 +99,7 @@ fun UsbConnectDialog(onConnected: () -> Unit, onDismiss: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = cancel,
-        title = { Text("USB-OTG") },
+        title = { Text(title) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -98,7 +110,9 @@ fun UsbConnectDialog(onConnected: () -> Unit, onDismiss: () -> Unit) {
                         if (phase is UsbPhase.Failed) {
                             Text(phase.message, color = MaterialTheme.colorScheme.tertiary)
                         }
-                        if (flow.devices.isEmpty()) {
+                        if (ownStack != null) {
+                            if (phase == UsbPhase.Choosing) Progress("Connecting…")
+                        } else if (flow.devices.isEmpty()) {
                             Text(
                                 "No USB device with debugging enabled found. Connect the target with " +
                                     "an OTG cable and enable USB debugging.",
@@ -117,7 +131,11 @@ fun UsbConnectDialog(onConnected: () -> Unit, onDismiss: () -> Unit) {
         },
         confirmButton = {
             val phase = flow.phase
-            if (phase == UsbPhase.Choosing || phase is UsbPhase.Failed) {
+            if (ownStack != null) {
+                if (phase is UsbPhase.Failed) {
+                    TextButton(onClick = { flow.connectOwnStack(ownStack.first, ownStack.second) }) { Text("Retry") }
+                }
+            } else if (phase == UsbPhase.Choosing || phase is UsbPhase.Failed) {
                 TextButton(onClick = { flow.refresh() }) { Text("Refresh") }
             }
         },
@@ -206,7 +224,16 @@ private class UsbConnectFlow(
     /** The composition is gone. */
     fun release() = cancel()
 
-    private fun connect(device: UsbDevice) {
+    private fun connect(device: UsbDevice) =
+        connect("usb:${device.label()}") { UsbPacketChannel.open(usbManager, device) }
+
+    /** Debug builds only: the same stack over a plain TCP socket to an adbd at [host]:[port]. */
+    fun connectOwnStack(host: String, port: Int) {
+        if (phase != UsbPhase.Choosing && phase !is UsbPhase.Failed) return
+        connect("raw:$host:$port") { TcpPacketChannel(host, port) }
+    }
+
+    private fun connect(target: String, openChannel: () -> AdbPacketChannel) {
         phase = UsbPhase.Connecting
         UsbSessions.replace(null)
         job = scope.launch {
@@ -216,7 +243,7 @@ private class UsbConnectFlow(
                     AdbKeyConnectionManager.getInstance(context).usbIdentity()
                 }
                 attempt = UsbAdbTransport(
-                    openChannel = { UsbPacketChannel.open(usbManager, device) },
+                    openChannel = openChannel,
                     identity = identity,
                     onAwaitingAuthorisation = {
                         scope.launch(Dispatchers.Main) {
@@ -236,7 +263,7 @@ private class UsbConnectFlow(
                 }
                 handedOver = true
                 UsbSessions.replace(attempt)
-                DeviceSession.attach("usb:${device.label()}", client) { UsbSessions.replace(null) }
+                DeviceSession.attach(target, client) { UsbSessions.replace(null) }
                 onConnected()
             } catch (e: CancellationException) {
                 if (!handedOver) attempt?.close()
