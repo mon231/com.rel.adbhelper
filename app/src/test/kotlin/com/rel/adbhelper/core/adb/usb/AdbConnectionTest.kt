@@ -94,6 +94,30 @@ class AdbConnectionTest {
         assertTrue(connection.isAlive)
     }
 
+    /** What a real adbd (Android 17 emulator) sends to a client that advertised version
+     * 0x01000000: an AUTH token first, then, after the signature, CNXN with version 0x01000001,
+     * max payload 0x40000, a long banner with `delayed_ack` in its features, and correct checksums
+     * on every packet; then streams work as usual. */
+    @Test
+    fun `handshake like a real adbd with version 0x01000001 and a 256 KiB payload`() {
+        val peer = ScriptedAdbPeer()
+        val future = connect(peer)
+        peer.expect(AdbWire.CNXN)
+        peer.send(AdbMessage(AdbWire.AUTH, AdbWire.AUTH_TOKEN, 0, ByteArray(20) { it.toByte() }))
+        assertEquals(AdbWire.AUTH_SIGNATURE, peer.expect(AdbWire.AUTH).arg0)
+        val banner = "device::ro.product.name=sdk_gphone64_x86_64;ro.product.model=sdk_gphone64_x86_64;" +
+            "ro.product.device=emu64xa;features=shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,abb," +
+            "abb_exec,remount_shell,track_app,sendrecv_v2,openscreen_mdns,devraw,app_info,delayed_ack"
+        peer.send(deviceCnxn(maxPayload = 0x40000, version = 0x01000001, banner = banner))
+        val connection = future.await().also { connections += it }
+        assertEquals(0x40000, connection.peerMaxPayload)
+        assertEquals(banner, connection.peerBanner)
+
+        val opened = openStream(connection, peer)
+        peer.send(AdbMessage.write(opened.remoteId, opened.localId, "hello\n".toByteArray()))
+        assertEquals("hello\n", String(opened.stream.readChunk()!!))
+    }
+
     @Test
     fun `handshake answers an AUTH token with a signature`() {
         val peer = ScriptedAdbPeer()

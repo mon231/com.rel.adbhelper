@@ -86,4 +86,9 @@ kotlin {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // Opt-in integration test against a real adbd (RealAdbdIntegrationTest); skipped when unset.
+    (System.getProperty("ADBHELPER_REAL_ADBD") ?: System.getenv("ADBHELPER_REAL_ADBD"))?.let {
+        systemProperty("ADBHELPER_REAL_ADBD", it)
+        inputs.property("adbhelperRealAdbd", it)
+    }
 }
