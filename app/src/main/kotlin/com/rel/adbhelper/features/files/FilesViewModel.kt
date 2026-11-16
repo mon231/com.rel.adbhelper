@@ -1,6 +1,7 @@
 package com.rel.adbhelper.features.files
 
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.adb.connectionLostMessage
 import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.files.FileEntry
@@ -161,10 +162,16 @@ class FilesViewModel(
                     onSuccess()
                     _state.update { it.copy(message = successMessage) }
                 } else {
-                    _state.update { it.copy(message = "Command failed") }
+                    _state.update { it.copy(
+                        message = if (result is com.rel.adbhelper.core.adb.AdbResult.TransportUnreachable) {
+                            connectionLostMessage(result.cause)
+                        } else {
+                            "Command failed"
+                        },
+                    ) }
                 }
             } catch (t: Throwable) {
-                _state.update { it.copy(message = "Connection to the device was lost") }
+                _state.update { it.copy(message = connectionLostMessage(t)) }
             }
             open(_state.value.path, keepMessage = true)
         }

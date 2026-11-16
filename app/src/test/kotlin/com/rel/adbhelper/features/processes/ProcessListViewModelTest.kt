@@ -24,6 +24,6 @@ class ProcessListViewModelTest {
         vm.load()
         advanceUntilIdle()
 
-        assertEquals("Connection to the device was lost", vm.state.value.message)
+        assertEquals("Connection to the device was lost (refused)", vm.state.value.message)
     }
 }

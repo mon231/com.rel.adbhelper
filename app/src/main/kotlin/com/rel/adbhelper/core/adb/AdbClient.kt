@@ -124,6 +124,14 @@ private suspend fun AdbStream.readChunkOrEof(
     if (e.message == "Stream closed.") null else throw e
 }
 
+/** android.util.Log, unless this runs on the plain JVM (unit tests), where it is not available. */
+private fun androidWarn(message: String) {
+    try {
+        android.util.Log.w("AdbClient", message)
+    } catch (_: RuntimeException) {
+    }
+}
+
 class AdbClient(
     private val transport: AdbTransport,
     /** Exposed for tests only, to prove the watchdog-close behavior below without a real 15s wait. */
@@ -133,7 +141,11 @@ class AdbClient(
     /** Exposed for tests only — see [raw]'s doc on why this is its own, much shorter, value than
      * [commandTimeoutMillis]. */
     private val rawChunkTimeoutMillis: Long = RAW_CHUNK_TIMEOUT_MILLIS,
+    /** Receives one line per transport failure; tests pass their own. Never given file contents. */
+    private val log: (String) -> Unit = ::androidWarn,
 ) {
+
+    private fun logFailure(what: String, t: Throwable) = log("$what failed: ${t.javaClass.simpleName}: ${t.message}")
 
     /** [timeoutMillis] bounds each wait for the command's next output, not the whole command —
      * raise it for a command that legitimately prints nothing for a long time (`pm install` of a
@@ -143,6 +155,7 @@ class AdbClient(
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
+        logFailure("shell:$command", t)
         AdbResult.TransportUnreachable(t)
     }
 
@@ -178,6 +191,7 @@ class AdbClient(
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
+        logFailure(service, t)
         throw IOException("failed to read from $service", t)
     }
 
@@ -235,6 +249,7 @@ class AdbClient(
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
+        logFailure("push $path", t)
         throw IOException("failed to write to $path", t)
     }
 
@@ -276,6 +291,7 @@ class AdbClient(
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
+            logFailure("pull $path", t)
             throw IOException("failed to read from $path", t)
         }
     }

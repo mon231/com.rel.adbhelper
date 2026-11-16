@@ -2,6 +2,7 @@ package com.rel.adbhelper.features.shell
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbStream
+import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.isRejection
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -102,7 +103,7 @@ class ShellViewModel(
                     }
                 }
             } catch (t: Throwable) {
-                _state.update { it.copy(connected = false, message = "Could not open shell") }
+                _state.update { it.copy(connected = false, message = "Could not open shell: ${t.describe()}") }
                 stream = null
             }
         }

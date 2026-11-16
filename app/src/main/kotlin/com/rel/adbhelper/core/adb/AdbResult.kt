@@ -12,8 +12,13 @@ sealed class AdbResult {
 fun AdbResult.outputOrThrow(): String = when (this) {
     is AdbResult.Success -> output
     is AdbResult.CommandFailed -> throw java.io.IOException(message)
-    is AdbResult.TransportUnreachable -> throw java.io.IOException("Connection to the device was lost", cause)
+    is AdbResult.TransportUnreachable -> throw java.io.IOException(connectionLostMessage(cause), cause)
 }
+
+/** The sentence shown when the link failed, with why in brackets, e.g.
+ * `Connection to the device was lost (timed out opening shell:wm density)`. */
+fun connectionLostMessage(cause: Throwable): String =
+    "Connection to the device was lost (${cause.describe()})"
 
 /** The messages of this failure and of its causes, joined with ": " — [AdbClient]'s wrappers say
  * what was being done ("failed to write to /x"), the cause says why. A message already contained

@@ -1,6 +1,7 @@
 package com.rel.adbhelper.features.processes
 
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.proc.ProcessEntry
 import com.rel.adbhelper.core.proc.parsePs
@@ -31,7 +32,7 @@ class ProcessListViewModel(
             _state.value = try {
                 State(loading = false, processes = parsePs(client.shell("ps -A").outputOrThrow()))
             } catch (t: Throwable) {
-                State(loading = false, message = t.message ?: "Connection to the device was lost")
+                State(loading = false, message = t.describe())
             }
         }
     }

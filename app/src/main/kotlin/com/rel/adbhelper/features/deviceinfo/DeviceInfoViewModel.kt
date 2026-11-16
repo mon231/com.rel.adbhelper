@@ -3,6 +3,7 @@ package com.rel.adbhelper.features.deviceinfo
 import android.content.Context
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.device.DeviceInfo
 import com.rel.adbhelper.core.device.buildDeviceInfo
@@ -41,7 +42,7 @@ class DeviceInfoViewModel(
                 val cores = client.shell("nproc").outputOrEmpty().trim().toIntOrNull() ?: 0
                 State(loading = false, info = buildDeviceInfo(props, battery, df, wm, ip, cores))
             } catch (t: Throwable) {
-                State(loading = false, message = "Connection to the device was lost")
+                State(loading = false, message = t.describe())
             }
         }
     }
@@ -57,7 +58,7 @@ class DeviceInfoViewModel(
                 file.writeBytes(bytes)
                 _state.update { it.copy(message = "Screenshot saved to ${file.absolutePath}") }
             } catch (t: Throwable) {
-                _state.update { it.copy(message = "Failed to capture screenshot") }
+                _state.update { it.copy(message = "Failed to capture screenshot: ${t.describe()}") }
             }
         }
     }

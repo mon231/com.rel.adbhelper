@@ -2,6 +2,7 @@ package com.rel.adbhelper.features.apps
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.connectionLostMessage
 import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.apps.AppDetails
@@ -64,7 +65,7 @@ class AppsViewModel(
             } catch (t: Throwable) {
                 _state.update { it.copy(
                     loading = false,
-                    message = t.message ?: "Connection to the device was lost",
+                    message = t.describe(),
                 ) }
             }
         }
@@ -80,7 +81,7 @@ class AppsViewModel(
                 val raw = client.shell("dumpsys package ${shellQuote(entry.pkg)}").outputOrThrow()
                 _state.update { it.copy(details = entry to parseDumpsysPackage(raw)) }
             } catch (t: Throwable) {
-                _state.update { it.copy(message = t.message ?: "Failed to read app details") }
+                _state.update { it.copy(message = t.describe()) }
             }
         }
     }
@@ -138,7 +139,7 @@ class AppsViewModel(
                     is AdbResult.CommandFailed -> "Install failed: ${result.message}"
                     is AdbResult.TransportUnreachable -> {
                         failure = result.cause
-                        "Install failed: connection to the device was lost (${result.cause.describe()})"
+                        "Install failed: ${connectionLostMessage(result.cause)}"
                     }
                 }
             } catch (c: CancellationException) {
@@ -175,11 +176,11 @@ class AppsViewModel(
                     message = when (result) {
                         is AdbResult.Success -> successMessage
                         is AdbResult.CommandFailed -> result.message
-                        is AdbResult.TransportUnreachable -> "Connection to the device was lost"
+                        is AdbResult.TransportUnreachable -> connectionLostMessage(result.cause)
                     },
                 ) }
             } catch (t: Throwable) {
-                _state.update { it.copy(message = "Connection to the device was lost") }
+                _state.update { it.copy(message = connectionLostMessage(t)) }
             }
             load()
         }

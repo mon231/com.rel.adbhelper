@@ -20,6 +20,18 @@ private fun client(transport: AdbTransport) = AdbClient(transport, watchdogDispa
 class AdbClientTest {
 
     @Test
+    fun `shell logs the service and the exception when the transport fails`() = runTest {
+        val lines = mutableListOf<String>()
+        val client = AdbClient(
+            FakeAdbTransport(throwOnOpen = IOException("refused")),
+            watchdogDispatcher = Dispatchers.Unconfined,
+            log = { lines += it },
+        )
+        assertTrue(client.shell("wm density") is AdbResult.TransportUnreachable)
+        assertEquals(listOf("shell:wm density failed: IOException: refused"), lines)
+    }
+
+    @Test
     fun `shell returns Success with command output when transport succeeds`() = runTest {
         val transport = FakeAdbTransport(scriptedOutput = "hello\n", exitCode = 0)
         val result = client(transport).shell("echo hello")

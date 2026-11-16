@@ -3,6 +3,7 @@ package com.rel.adbhelper.features.power
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
 import com.rel.adbhelper.core.adb.isRejection
+import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.power.PowerCommands
 import kotlinx.coroutines.CoroutineScope
@@ -36,7 +37,7 @@ class PowerViewModel(
                 val density = Regex("Physical density: (\\d+)").find(wm)?.groupValues?.get(1)?.toIntOrNull()
                 _state.value = State(currentDensity = density, densityInput = density?.toString().orEmpty())
             } catch (t: Throwable) {
-                _state.value = State(message = "Connection to the device was lost")
+                _state.value = State(message = t.describe())
             }
         }
     }

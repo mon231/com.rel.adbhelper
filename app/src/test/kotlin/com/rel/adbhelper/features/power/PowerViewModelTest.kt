@@ -88,7 +88,7 @@ class PowerViewModelTest {
         vm.load()
         advanceUntilIdle()
 
-        assertEquals("Connection to the device was lost", vm.state.value.message)
+        assertEquals("Connection to the device was lost (Stream closed.)", vm.state.value.message)
     }
 
     @Test
