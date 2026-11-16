@@ -157,13 +157,14 @@ fun ConnectScreen(
                     // port-5555 sweep cannot. Callbacks arrive off the main thread, so hop to
                     // this (main) scope before touching Compose state.
                     val started = System.currentTimeMillis()
+                    val own = runCatching { localIpv4Addresses() }.getOrDefault(emptySet())
                     val mdns = listOf(MdnsServiceTypes.CONNECT, MdnsServiceTypes.ADB).map {
                         type -> type to NsdMdnsDiscovery(context.applicationContext)
                     }
                     try {
                         mdns.forEach { (type, discovery) ->
                             discovery.start(type) { target ->
-                                scope.launch { scanResults = mergeScanResults(scanResults.orEmpty(), listOf(target)) }
+                                scope.launch { scanResults = mergeScanResults(scanResults.orEmpty(), listOf(target), own) }
                             }
                         }
                         val subnet = localSubnet(context.applicationContext)

@@ -90,9 +90,14 @@ class NsdMdnsDiscovery(context: Context) : MdnsDiscovery {
     }
 }
 
-/** Adds [found] targets to [existing], de-duplicated and sorted. */
-fun mergeScanResults(existing: List<String>, found: Collection<String>): List<String> =
-    (existing + found).distinct().sorted()
+/** Adds [found] targets to [existing], de-duplicated and sorted, leaving out any `host:port` whose
+ * host is one of [ownAddresses] — this device's own ADB services are announced over mDNS too. */
+fun mergeScanResults(
+    existing: List<String>,
+    found: Collection<String>,
+    ownAddresses: Set<String> = emptySet(),
+): List<String> =
+    (existing + found).filter { it.substringBeforeLast(':') !in ownAddresses }.distinct().sorted()
 
 /** The pairing address to pre-fill: the only discovered service, and only while the field is blank. */
 fun pairingPrefill(found: List<String>, current: String): String? =

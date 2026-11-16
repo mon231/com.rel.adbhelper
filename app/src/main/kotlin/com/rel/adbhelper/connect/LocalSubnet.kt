@@ -21,5 +21,15 @@ suspend fun localSubnet(context: Context): String? = withContext(Dispatchers.IO)
         .firstOrNull()
 }
 
+/** Every IPv4 address of this device (all interfaces), so its own services can be told apart. */
+suspend fun localIpv4Addresses(): Set<String> = withContext(Dispatchers.IO) {
+    NetworkInterface.getNetworkInterfaces().asSequence()
+        .filter { it.isUp }
+        .flatMap { it.inetAddresses.asSequence() }
+        .filterIsInstance<Inet4Address>()
+        .mapNotNull { it.hostAddress }
+        .toSet()
+}
+
 private fun intToIp(value: Int): String =
     listOf(value and 0xFF, value shr 8 and 0xFF, value shr 16 and 0xFF, value shr 24 and 0xFF).joinToString(".")
