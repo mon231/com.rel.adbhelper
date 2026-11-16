@@ -33,6 +33,25 @@ class FilesViewModelTest {
     private val awkwardQuoted = """'/sdcard/it'\''s a file.txt'"""
 
     @Test
+    fun `listCommand quotes the directory and lists without escaping`() {
+        assertEquals(
+            """ls -laN '/sdcard/it'\''s dir/' 2>/dev/null || ls -la '/sdcard/it'\''s dir/'""",
+            FilesViewModel.listCommand("/sdcard/it's dir"),
+        )
+    }
+
+    @Test
+    fun `a failed listing shows the message of the plain ls fallback`() = runTest {
+        val transport = FakeAdbTransport(scriptedOutput = "ls: /nope/: No such file or directory\n", exitCode = 1)
+        val vm = FilesViewModel(client(transport), scope = this)
+
+        vm.open("/nope")
+        advanceUntilIdle()
+
+        assertTrue("No such file or directory" in vm.state.value.message, vm.state.value.message)
+    }
+
+    @Test
     fun `delete quotes the path`() = runTest {
         val transport = FakeAdbTransport()
         val vm = FilesViewModel(client(transport), scope = this)
@@ -79,7 +98,7 @@ class FilesViewModelTest {
         vm.entryClick(entry("/sdcard", perms = "lrw-r--r--"))
         advanceUntilIdle()
 
-        assertTrue(shellService("ls -la '/sdcard/'") in transport.closedServices, "ran: ${transport.closedServices}")
+        assertTrue(shellService("ls -laN '/sdcard/' 2>/dev/null || ls -la '/sdcard/'") in transport.closedServices, "ran: ${transport.closedServices}")
         assertEquals(listOf("/sdcard/DCIM"), vm.state.value.entries.map { it.path })
         assertEquals(null, vm.state.value.selectedForInfo)
     }
@@ -106,7 +125,7 @@ class FilesViewModelTest {
         advanceUntilIdle()
 
         assertEquals("/", vm.state.value.path)
-        assertTrue(shellService("ls -la '/'") in transport.closedServices, "ran: ${transport.closedServices}")
+        assertTrue(shellService("ls -laN '/' 2>/dev/null || ls -la '/'") in transport.closedServices, "ran: ${transport.closedServices}")
     }
 
     @Test

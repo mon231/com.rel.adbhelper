@@ -1,6 +1,7 @@
 package com.rel.adbhelper.features.files
 
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.files.FileEntry
 import com.rel.adbhelper.core.files.parseLsLa
 import com.rel.adbhelper.core.shell.shellQuote
@@ -41,9 +42,7 @@ class FilesViewModel(
                 // trailing slash to follow it (e.g. /sdcard -> /storage/self/primary). The root
                 // stays "/" rather than trimming down to "".
                 val dir = path.trimEnd('/').ifEmpty { "/" }
-                val raw = client.shell("ls -la ${shellQuote("${dir.trimEnd('/')}/")}").let { result ->
-                    if (result is com.rel.adbhelper.core.adb.AdbResult.Success) result.output else null
-                } ?: throw IllegalStateException("ls failed")
+                val raw = client.shell(listCommand(dir)).outputOrThrow()
                 _state.update { it.copy(
                     path = dir,
                     entries = parseLsLa(raw, dir),
@@ -164,6 +163,17 @@ class FilesViewModel(
     }
 
     companion object {
+        /**
+         * `-N`: the `shell:` service runs under a terminal, and toybox `ls` on a terminal escapes
+         * spaces with a backslash (`my\ file`) — live-reproduced: every name with a space was
+         * listed, and then addressed, with a literal backslash, so it could not be opened,
+         * renamed, deleted or downloaded. An `ls` too old to know `-N` falls back to plain `-la`.
+         */
+        internal fun listCommand(dir: String): String {
+            val target = shellQuote("${dir.trimEnd('/')}/")
+            return "ls -laN $target 2>/dev/null || ls -la $target"
+        }
+
         const val DEFAULT_ROOT = "/sdcard"
     }
 }
