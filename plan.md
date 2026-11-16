@@ -33,7 +33,11 @@ record of what was done.
 **1b. One unexplained "Connection to the device was lost".** The Power tab showed it once, right
 after leaving the Logs tab; six further attempts (from Logs and from Shell) were fine. Suspect a
 race between closing a long-lived stream and the next command on the shared connection. Needs a
-way to reproduce before anyone changes code.
+way to reproduce before anyone changes code. Read through, no defect found: libadb's
+`openStream`/`disconnect`/`isConnected` share one lock and each stream has its own id, so closing
+the Logs stream cannot corrupt a concurrent open, and nothing in the Logs/Shell path calls
+`markPoisoned` (only the watchdogs do, and the Logs stream has none). Failures now carry their
+cause on screen and in logcat (tag `AdbClient`); if it recurs, read that text first.
 
 **1c. One unexplained stall of the large upload path** (the same event as 1a): a write blocked
 longer than the 15 s watchdog mid-transfer. If it recurs, check whether it is the emulator link or
