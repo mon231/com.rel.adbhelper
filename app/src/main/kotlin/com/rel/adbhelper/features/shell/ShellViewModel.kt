@@ -88,7 +88,7 @@ class ShellViewModel(
                             // The tail is shown as it stands: a shell prompt never ends in a
                             // newline, and holding it back would hide it until the next command.
                             appendOutput(
-                                text.split('\n').map { it.removeSuffix("\r") },
+                                text.split('\n'),
                                 pending.toString(Charsets.UTF_8.name()),
                             )
                         }
@@ -109,7 +109,9 @@ class ShellViewModel(
     }
 
     private fun appendOutput(lines: List<String>, partial: String) {
-        _state.update { it.copy(output = (it.output + lines).takeLast(MAX_OUTPUT_ENTRIES), partial = partial) }
+        // A terminal sends "\r\n", and "\r\r\n" after an echoed command: no row keeps a "\r".
+        val clean = lines.map { it.trimEnd('\r') }
+        _state.update { it.copy(output = (it.output + clean).takeLast(MAX_OUTPUT_ENTRIES), partial = partial.trimEnd('\r')) }
     }
 
     /** Marks the session ended, but only if [ended] is still the current one. */

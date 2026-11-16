@@ -174,6 +174,23 @@ class ShellViewModelTest {
     }
 
     @Test
+    fun `carriage returns are stripped from rows and from the partial line`() {
+        val transport = FakeAdbTransport(
+            scriptedOutput = "a\r\r\nb\r\nprompt\r",
+            omitExitMarker = true,
+            chunkSize = 100,
+        )
+        val vm = ShellViewModel(
+            AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.start()
+
+        assertEquals(listOf("a", "b", "prompt"), vm.state.value.output)
+    }
+
+    @Test
     fun `restart closes the stream off the calling thread, not inline`() {
         // Live-reproduced: AdbStream.close() sends a real CLSE packet over the socket despite
         // being exposed as a plain non-suspend function. Calling it straight from restart() on
