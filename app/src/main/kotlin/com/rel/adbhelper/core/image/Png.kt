@@ -1,7 +1,8 @@
 package com.rel.adbhelper.core.image
 
 private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
-private val PNG_IEND = byteArrayOf(0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE.toByte(), 0x42, 0x60, 0x82.toByte())
+/** The IEND chunk that ends every PNG (length 0, type, CRC). */
+internal val PNG_IEND = byteArrayOf(0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE.toByte(), 0x42, 0x60, 0x82.toByte())
 
 /**
  * Whether [bytes] is a whole PNG: the 8-byte signature up front and the IEND chunk at the very

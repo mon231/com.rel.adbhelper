@@ -175,14 +175,25 @@ class AdbClient(
      * message. Unlike [runShell], this has no embedded completion marker to fall back on (binary
      * data), so that exact, confirmed-benign exception is treated as a normal end of stream
      * instead of a failure, from either path.
+     *
+     * A caller that knows how its data ends passes [endMarker] (a PNG's IEND trailer): reading
+     * stops, and the stream is closed normally, as soon as the data received so far ends with it.
+     * That avoids waiting for the watchdog above, which would also [AdbTransport.invalidate] the
+     * shared connection and so break every other stream open on it. Only the last
+     * `endMarker.size` bytes are compared, across chunk boundaries.
      */
-    suspend fun raw(service: String): ByteArray = try {
+    suspend fun raw(service: String, endMarker: ByteArray? = null): ByteArray = try {
         val stream = openWithTimeout(service)
         try {
             val buffer = java.io.ByteArrayOutputStream()
+            var tail = ByteArray(0)
             while (true) {
                 val chunk = stream.readChunkOrEof(rawChunkTimeoutMillis, watchdogDispatcher, transport::invalidate) ?: break
                 buffer.write(chunk)
+                if (endMarker == null) continue
+                val recent = chunk.copyOfRange(maxOf(0, chunk.size - endMarker.size), chunk.size)
+                tail = (tail + recent).let { it.copyOfRange(maxOf(0, it.size - endMarker.size), it.size) }
+                if (tail.contentEquals(endMarker)) break
             }
             buffer.toByteArray()
         } finally {

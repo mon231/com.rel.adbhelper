@@ -8,6 +8,7 @@ import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.device.DeviceInfo
 import com.rel.adbhelper.core.device.buildDeviceInfo
 import com.rel.adbhelper.core.device.parseGetprop
+import com.rel.adbhelper.core.image.PNG_IEND
 import com.rel.adbhelper.core.image.isCompletePng
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +52,7 @@ class DeviceInfoViewModel(
         scope.launch {
             _state.update { it.copy(message = "Capturing screenshot…") }
             try {
-                val bytes = client.raw("exec:screencap -p")
+                val bytes = client.raw("exec:screencap -p", endMarker = PNG_IEND)
                 if (!isCompletePng(bytes)) throw java.io.IOException("incomplete screenshot")
                 val dir = context.getExternalFilesDir("Screenshots") ?: context.filesDir
                 val file = java.io.File(dir, "adbhelper-${System.currentTimeMillis()}.png")

@@ -1,6 +1,7 @@
 package com.rel.adbhelper.features.livescreen
 
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.image.PNG_IEND
 import com.rel.adbhelper.core.image.isCompletePng
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -48,7 +49,7 @@ class LiveScreenViewModel(
         job = scope.launch {
             while (isActive) {
                 try {
-                    val bytes = client.raw(SCREEN_SERVICE)
+                    val bytes = client.raw(SCREEN_SERVICE, endMarker = PNG_IEND)
                     // A capture cut short by a stalled read is skipped, not shown or treated as
                     // an error — the next one replaces it within a moment.
                     if (isCompletePng(bytes)) {

@@ -190,6 +190,55 @@ class AdbClientTest {
         )
     }
 
+    private val endMarker = byteArrayOf(0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE.toByte(), 0x42, 0x60, 0x82.toByte())
+    private val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 1, 2, 3, 4, 5, 6, 7, 8, 9) + endMarker
+
+    @Test
+    fun `raw with an end marker returns at once when it arrives and leaves the connection alone`() {
+        // The stream delivers the whole PNG (in chunks smaller than the marker, so it arrives
+        // split) and then blocks forever, like the library does at the end of a screencap.
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:screencap -p" to png),
+            chunkSize = 5,
+            neverSignalsEof = true,
+        )
+        val client = AdbClient(
+            transport,
+            commandTimeoutMillis = 5_000L,
+            watchdogDispatcher = Dispatchers.Unconfined,
+            rawChunkTimeoutMillis = 5_000L,
+        )
+
+        var bytes = ByteArray(0)
+        val elapsedMillis = kotlin.system.measureTimeMillis {
+            bytes = kotlinx.coroutines.runBlocking { client.raw("exec:screencap -p", endMarker = endMarker) }
+        }
+
+        assertTrue(png.contentEquals(bytes))
+        assertTrue(elapsedMillis < 2_000, "took ${elapsedMillis}ms; the 5s watchdog must not be waited for")
+        assertEquals(0, transport.invalidateCallCount)
+        assertTrue("exec:screencap -p" in transport.closedServices)
+    }
+
+    @Test
+    fun `raw without an end marker still invalidates the connection when the stream stalls`() {
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:screencap -p" to png),
+            neverSignalsEof = true,
+        )
+        val client = AdbClient(
+            transport,
+            commandTimeoutMillis = 5_000L,
+            watchdogDispatcher = Dispatchers.Unconfined,
+            rawChunkTimeoutMillis = 300L,
+        )
+
+        val bytes = kotlinx.coroutines.runBlocking { client.raw("exec:screencap -p") }
+
+        assertTrue(png.contentEquals(bytes))
+        assertEquals(1, transport.invalidateCallCount)
+    }
+
     @Test
     fun `shell honours a per-call timeout instead of the client-wide one`() {
         // Plain runBlocking for the same reason as the raw watchdog test above: only a real
