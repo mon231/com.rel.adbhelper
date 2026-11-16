@@ -33,10 +33,11 @@ class FilesViewModel(
     val state: StateFlow<State> = _state.asStateFlow()
 
     /** [link]: the symlink being followed, if any — when it turns out not to lead to a
-     * directory, its info dialog is shown instead of a listing error. */
-    fun open(path: String, link: FileEntry? = null) {
+     * directory, its info dialog is shown instead of a listing error. [keepMessage]: an internal
+     * refresh after an action, which must not wipe that action's result message. */
+    fun open(path: String, link: FileEntry? = null, keepMessage: Boolean = false) {
         scope.launch {
-            _state.update { it.copy(loading = true, message = "") }
+            _state.update { it.copy(loading = true, message = if (keepMessage) it.message else "") }
             try {
                 // `ls -la <dir>` on a symlink lists the link itself, so always list with a
                 // trailing slash to follow it (e.g. /sdcard -> /storage/self/primary). The root
@@ -118,26 +119,32 @@ class FilesViewModel(
                 }
                 input.use { client.push(path, it) }
                 _state.update { it.copy(message = "Uploaded ${path.substringAfterLast('/')}") }
-                open(_state.value.path)
+                open(_state.value.path, keepMessage = true)
             } catch (t: Throwable) {
                 _state.update { it.copy(message = "Upload failed: ${t.describe()}") }
             }
         }
     }
 
-    fun download(entry: FileEntry, saveContext: android.content.Context) {
+    fun download(entry: FileEntry, saveContext: android.content.Context) =
+        download(entry, saveContext.getExternalFilesDir("Downloads") ?: saveContext.filesDir)
+
+    /** Writes to a `.part` file and only renames it to a free name in [dir] once the whole file
+     * arrived, so a failed (or repeated) download never touches an earlier downloaded file. */
+    fun download(entry: FileEntry, dir: java.io.File) {
         scope.launch {
-            val dir = saveContext.getExternalFilesDir("Downloads") ?: saveContext.filesDir
-            val file = uniqueFile(dir, entry.name)
+            val part = uniqueFile(dir, "${entry.name}.part")
             try {
                 // Streams chunk-by-chunk straight to disk — entry.size can be arbitrarily large
                 // (a video, an APK), so never buffer the whole file in memory first.
-                file.outputStream().use { out ->
+                part.outputStream().use { out ->
                     client.pullTo(entry.path) { chunk -> out.write(chunk) }
                 }
+                val file = uniqueFile(dir, entry.name)
+                if (!part.renameTo(file)) throw java.io.IOException("could not save ${file.name}")
                 _state.update { it.copy(message = "Downloaded to ${file.absolutePath}") }
             } catch (t: Throwable) {
-                file.delete()
+                part.delete()
                 _state.update { it.copy(message = "Download failed: ${t.describe()}") }
             }
         }
@@ -158,7 +165,7 @@ class FilesViewModel(
             } catch (t: Throwable) {
                 _state.update { it.copy(message = "Connection to the device was lost") }
             }
-            open(_state.value.path)
+            open(_state.value.path, keepMessage = true)
         }
     }
 

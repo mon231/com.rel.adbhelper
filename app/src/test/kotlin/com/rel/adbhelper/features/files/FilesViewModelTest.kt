@@ -194,4 +194,73 @@ class FilesViewModelTest {
 
         assertEquals("Could not read the selected file", vm.state.value.message)
     }
+
+    @Test
+    fun `delete keeps its result message through the refresh`() = runTest {
+        val transport = FakeAdbTransport()
+        val vm = FilesViewModel(client(transport), scope = this)
+
+        vm.delete(awkward)
+        advanceUntilIdle()
+
+        assertEquals("Deleted", vm.state.value.message)
+        assertTrue(shellService(FilesViewModel.listCommand("/sdcard")) in transport.closedServices, "ran: ${transport.closedServices}")
+    }
+
+    @Test
+    fun `navigating clears the previous message`() = runTest {
+        val vm = FilesViewModel(client(FakeAdbTransport()), scope = this)
+        vm.delete(awkward)
+        advanceUntilIdle()
+
+        vm.open("/sdcard")
+        advanceUntilIdle()
+
+        assertEquals("", vm.state.value.message)
+    }
+
+    @Test
+    fun `a repeated download gets a new name and a failed one leaves earlier files alone`() = runTest {
+        val dir = java.nio.file.Files.createTempDirectory("dl").toFile()
+        try {
+            val payload = ByteArray(5) { it.toByte() }
+            val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/a.bin'" to payload))
+            val vm = FilesViewModel(client(transport), scope = this)
+
+            vm.download(entry("/sdcard/a.bin"), dir)
+            advanceUntilIdle()
+            vm.download(entry("/sdcard/a.bin"), dir)
+            advanceUntilIdle()
+            vm.download(entry("/sdcard/missing.bin"), dir)
+            advanceUntilIdle()
+
+            assertTrue(vm.state.value.message.startsWith("Download failed"), vm.state.value.message)
+            assertEquals(listOf("a (1).bin", "a.bin"), dir.list()!!.sorted())
+            assertTrue(payload.contentEquals(java.io.File(dir, "a.bin").readBytes()))
+            assertTrue(payload.contentEquals(java.io.File(dir, "a (1).bin").readBytes()))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a download that fails midway leaves no partial file and keeps an existing one`() = runTest {
+        val dir = java.nio.file.Files.createTempDirectory("dl").toFile()
+        try {
+            val transport = FakeAdbTransport(
+                serviceOutputs = mapOf("exec:cat '/sdcard/a.bin'" to ByteArray(5)),
+                statOutput = "9",
+            )
+            val vm = FilesViewModel(client(transport), scope = this)
+            java.io.File(dir, "a.bin").writeText("old")
+
+            vm.download(entry("/sdcard/a.bin"), dir)
+            advanceUntilIdle()
+
+            assertEquals(listOf("a.bin"), dir.list()!!.toList())
+            assertEquals("old", java.io.File(dir, "a.bin").readText())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }
