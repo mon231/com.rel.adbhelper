@@ -191,6 +191,49 @@ class RealAdbdIntegrationTest {
         }
     }
 
+    @Test
+    @Order(9)
+    fun `thirty two MiB pushed is verified on the device and pulled back identical`() = runBlocking {
+        // The second target is the shared storage (FUSE), a much slower sink than /data.
+        for (path in listOf("/data/local/tmp/adbhelper-it-big.bin", "/sdcard/Download/adbhelper-it-big.bin")) bigTransfer(path)
+    }
+
+    private suspend fun bigTransfer(path: String) {
+        val data = ByteArray(32 * 1024 * 1024).also { Random(7).nextBytes(it) }
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
+        try {
+            val started = System.nanoTime()
+            client.push(path, data)
+            println("[$ENV] pushed ${data.size} bytes in ${(System.nanoTime() - started) / 1_000_000} ms")
+            val size = client.shell("wc -c < $path")
+            assertTrue(size is AdbResult.Success && size.output.trim() == data.size.toString(), size.toString())
+            val remote = client.shell("sha256sum $path")
+            assertTrue(remote is AdbResult.Success && remote.output.startsWith(sha), "device says $remote, expected $sha")
+            val back = client.pull(path)
+            assertEquals(data.size, back.size)
+            assertTrue(data.contentEquals(back), "pulled bytes differ")
+        } finally {
+            client.shell("rm -f $path")
+        }
+    }
+
+    @Test
+    @Order(10)
+    fun `several medium transfers in a row`() = runBlocking {
+        val path = "/data/local/tmp/adbhelper-it-medium.bin"
+        try {
+            repeat(8) { i ->
+                val data = ByteArray(6 * 1024 * 1024 + i * 12_345).also { Random(100L + i).nextBytes(it) }
+                client.push(path, data)
+                val size = client.shell("wc -c < $path")
+                assertTrue(size is AdbResult.Success && size.output.trim() == data.size.toString(), "round $i: $size")
+                assertTrue(data.contentEquals(client.pull(path)), "round $i: pulled bytes differ")
+            }
+        } finally {
+            client.shell("rm -f $path")
+        }
+    }
+
     private suspend fun readUntil(stream: AdbStream, into: StringBuilder, done: (String) -> Boolean) {
         withTimeout(15_000) {
             while (!done(into.toString())) {
