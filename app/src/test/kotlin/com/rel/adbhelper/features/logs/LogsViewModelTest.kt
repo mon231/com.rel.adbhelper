@@ -128,6 +128,31 @@ class LogsViewModelTest {
     }
 
     @Test
+    fun `a text filter set while streaming matches buffered and later lines, by tag or message, ignoring case`() {
+        val vm = started()
+        stream.feed(
+            "11-15 09:41:02.118  1423  1479 I ActivityManager: Start proc com.x\n" +
+                "11-15 09:41:02.119  1423  1479 I Other: nothing here\n" +
+                "11-15 09:41:02.120  1423  1479 D Other: ran activitymanager call\n",
+        )
+        awaitUntil("the buffered lines") { vm.state.value.lines.size == 3 }
+
+        vm.setQuery("ActivityManager")
+        assertEquals(listOf("Start proc com.x", "ran activitymanager call"), vm.state.value.visible.map { it.message })
+
+        stream.feed(
+            "11-15 09:41:03.000  1423  1479 W ActivityManager: later one\n" +
+                "11-15 09:41:03.001  1423  1479 W Other: unrelated\n",
+        )
+        awaitUntil("the later lines") { vm.state.value.lines.size == 5 }
+
+        assertEquals(
+            listOf("Start proc com.x", "ran activitymanager call", "later one"),
+            vm.state.value.visible.map { it.message },
+        )
+    }
+
+    @Test
     fun `the buffer keeps only the newest lines and the filtered view stays in step`() {
         val vm = started()
         vm.setMinLevel('W')
