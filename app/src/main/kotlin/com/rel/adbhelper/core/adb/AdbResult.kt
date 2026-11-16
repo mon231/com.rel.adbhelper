@@ -15,6 +15,21 @@ fun AdbResult.outputOrThrow(): String = when (this) {
     is AdbResult.TransportUnreachable -> throw java.io.IOException("Connection to the device was lost", cause)
 }
 
+/** The messages of this failure and of its causes, joined with ": " — [AdbClient]'s wrappers say
+ * what was being done ("failed to write to /x"), the cause says why. A message already contained
+ * in an earlier one (a wrapper that copied its cause's text) is not repeated. */
+fun Throwable.describe(): String {
+    val parts = mutableListOf<String>()
+    var t: Throwable? = this
+    var depth = 0
+    while (t != null && depth++ < 8) {
+        val m = t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
+        if (parts.none { m in it }) parts += m
+        t = t.cause
+    }
+    return parts.joinToString(": ")
+}
+
 /**
  * True when the target itself rejected the command (non-zero exit, e.g. permission denied) —
  * as opposed to the link dropping before any exit status arrived, which is what a command that

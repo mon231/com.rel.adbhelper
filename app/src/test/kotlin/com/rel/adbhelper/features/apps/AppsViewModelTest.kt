@@ -101,6 +101,40 @@ class AppsViewModelTest {
     }
 
     @Test
+    fun `install removes the temporary apk when the push fails and shows the cause`() {
+        val transport = FakeAdbTransport(throwOnOpen = java.io.IOException("refused"))
+        val vm = AppsViewModel(client(transport), scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined))
+
+        vm.install("app.apk") { java.io.ByteArrayInputStream(byteArrayOf(1)) }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!vm.state.value.busy.startsWith("Install failed") && System.currentTimeMillis() < deadline) Thread.sleep(10)
+
+        val busy = vm.state.value.busy
+        assertTrue("failed to write to /data/local/tmp/adbhelper-install.apk" in busy, busy)
+        assertTrue("refused" in busy, busy)
+        assertTrue(
+            transport.openedServices.any { it.startsWith("shell:rm '/data/local/tmp/adbhelper-install.apk'") },
+            "expected an rm of the temporary file, opened: ${transport.openedServices}",
+        )
+    }
+
+    @Test
+    fun `install removes the temporary apk when pm rejects it`() {
+        val transport = FakeAdbTransport(scriptedOutput = "Failure [INSTALL_FAILED_INVALID_APK]\n", exitCode = 1)
+        val vm = AppsViewModel(client(transport), scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined))
+
+        vm.install("app.apk") { java.io.ByteArrayInputStream(byteArrayOf(1)) }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!vm.state.value.busy.startsWith("Install failed") && System.currentTimeMillis() < deadline) Thread.sleep(10)
+
+        assertEquals("Install failed: Failure [INSTALL_FAILED_INVALID_APK]", vm.state.value.busy.trim())
+        assertTrue(
+            transport.openedServices.any { it.startsWith("shell:rm '/data/local/tmp/adbhelper-install.apk'") },
+            "expected an rm of the temporary file, opened: ${transport.openedServices}",
+        )
+    }
+
+    @Test
     fun `install streams the apk to the target and runs pm install`() {
         val transport = FakeAdbTransport()
         val vm = AppsViewModel(client(transport), scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined))

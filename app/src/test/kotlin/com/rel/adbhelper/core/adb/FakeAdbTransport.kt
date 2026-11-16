@@ -54,7 +54,11 @@ class FakeAdbTransport(
         invalidateCallCount++
     }
 
+    /** Every service string [open] was asked for, in order — including ones that then failed. */
+    val openedServices = java.util.concurrent.CopyOnWriteArrayList<String>()
+
     override suspend fun open(service: String): AdbStream {
+        openedServices.add(service)
         if (openDelayMillis > 0) kotlinx.coroutines.delay(openDelayMillis)
         if (hangOnOpen) awaitCancellation()
         throwOnOpen?.let { throw it }

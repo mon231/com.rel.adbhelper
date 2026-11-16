@@ -2,14 +2,17 @@ package com.rel.adbhelper.features.apps
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.apps.AppDetails
 import com.rel.adbhelper.core.apps.AppEntry
 import com.rel.adbhelper.core.apps.parseDumpsysPackage
 import com.rel.adbhelper.core.apps.parsePmList
 import com.rel.adbhelper.core.shell.shellQuote
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -119,26 +122,46 @@ class AppsViewModel(
     fun install(name: String, openInput: () -> InputStream?) {
         scope.launch {
             _state.update { it.copy(busy = "Installing $name…") }
-            try {
-                val tempPath = "/data/local/tmp/adbhelper-install.apk"
+            val tempPath = "/data/local/tmp/adbhelper-install.apk"
+            var failure: Throwable? = null
+            var installed = false
+            val outcome = try {
                 val input = withContext(Dispatchers.IO) { openInput() }
                     ?: throw IOException("Could not read the selected file")
                 input.use { client.push(tempPath, it) }
                 // pm install prints nothing until it finishes, which for a large APK is far
                 // longer than the default per-read timeout.
                 val result = client.shell("pm install -r ${shellQuote(tempPath)}", timeoutMillis = INSTALL_TIMEOUT_MILLIS)
-                client.shell("rm ${shellQuote(tempPath)}")
                 // pm's own reason (INSTALL_FAILED_VERSION_DOWNGRADE, ...) is what the user needs.
-                val outcome = when (result) {
-                    is AdbResult.Success -> "Installed $name"
+                when (result) {
+                    is AdbResult.Success -> "Installed $name".also { installed = true }
                     is AdbResult.CommandFailed -> "Install failed: ${result.message}"
-                    is AdbResult.TransportUnreachable -> "Install failed: connection to the device was lost"
+                    is AdbResult.TransportUnreachable -> {
+                        failure = result.cause
+                        "Install failed: connection to the device was lost (${result.cause.describe()})"
+                    }
                 }
-                _state.update { it.copy(busy = outcome) }
-                load()
+            } catch (c: CancellationException) {
+                throw c
             } catch (t: Throwable) {
-                _state.update { it.copy(busy = "Install failed: ${t.message ?: "unknown error"}") }
+                failure = t
+                "Install failed: ${t.describe()}"
             }
+            removeTempFile(tempPath, failure)
+            _state.update { it.copy(busy = outcome) }
+            if (installed) load()
+        }
+    }
+
+    /** Best effort, and never masks the install's own outcome. Skipped after a timeout: the link
+     * did not answer, so the `rm` would only wait out another full timeout. */
+    private suspend fun removeTempFile(path: String, failure: Throwable?) {
+        if (generateSequence(failure) { it.cause }.any { it is TimeoutCancellationException }) return
+        try {
+            client.shell("rm ${shellQuote(path)}")
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
         }
     }
 

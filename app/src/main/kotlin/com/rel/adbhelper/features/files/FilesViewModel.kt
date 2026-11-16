@@ -1,6 +1,7 @@
 package com.rel.adbhelper.features.files
 
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.adb.describe
 import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.files.FileEntry
 import com.rel.adbhelper.core.files.parseLsLa
@@ -184,11 +185,6 @@ class FilesViewModel(
         const val DEFAULT_ROOT = "/sdcard"
     }
 }
-
-/** The failure's own message plus its cause's: [AdbClient]'s wrappers say what was being done
- * ("failed to write to /x"), the cause says why. */
-private fun Throwable.describe(): String =
-    listOfNotNull(message, cause?.message).distinct().joinToString(": ").ifEmpty { "unknown error" }
 
 /** [name] in [dir], or `name (1).ext`, `name (2).ext`, ... when that file already exists, so a
  * download never silently overwrites an earlier one. */

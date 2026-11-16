@@ -30,12 +30,6 @@ record of what was done.
 
 ## 1. Open bugs (found on the emulators)
 
-**1a. A failed install leaves its temporary APK on the target and hides the reason.**
-Seen once: a 28 MB install stalled at 19 MB and ended with
-`Install failed: failed to write to /data/local/tmp/adbhelper-install.apk`; the retry succeeded in
-24 s. `AppsViewModel.install` should remove the temporary file when the push or the install
-fails, and show the underlying cause (the message chain), as the Files tab does.
-
 **1b. One unexplained "Connection to the device was lost".** The Power tab showed it once, right
 after leaving the Logs tab; six further attempts (from Logs and from Shell) were fine. Suspect a
 race between closing a long-lived stream and the next command on the shared connection. Needs a
