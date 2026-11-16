@@ -119,6 +119,29 @@ class AdbConnectionTest {
     }
 
     @Test
+    fun `a reader failure is kept, logged once and named in later errors`() {
+        val peer = ScriptedAdbPeer()
+        val logged = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val future = async { AdbConnection.connect(peer, FakeIdentity(), log = { logged += it }) }
+        peer.expect(AdbWire.CNXN)
+        peer.send(deviceCnxn())
+        val connection = future.await().also { connections += it }
+        val opened = openStream(connection, peer)
+
+        peer.failReads(IOException("Connection reset"))
+        val error = assertThrows(IOException::class.java) { while (true) opened.stream.readChunk() }
+        assertTrue(error.message!!.contains("reader: Connection reset"), error.message)
+        assertEquals("reader: Connection reset", connection.failureReason)
+        val writeError = assertThrows(IOException::class.java) { opened.stream.write(ByteArray(10)) }
+        assertTrue(writeError.message!!.contains("reader: Connection reset"), writeError.message)
+        val openError = assertThrows(IOException::class.java) { connection.open("shell:y") }
+        assertTrue(openError.message!!.contains("reader: Connection reset"), openError.message)
+        connection.close()
+        assertEquals(1, logged.size, logged.toString())
+        assertTrue(logged[0].contains("reader") && logged[0].contains("Connection reset"), logged[0])
+    }
+
+    @Test
     fun `handshake answers an AUTH token with a signature`() {
         val peer = ScriptedAdbPeer()
         var asked = false

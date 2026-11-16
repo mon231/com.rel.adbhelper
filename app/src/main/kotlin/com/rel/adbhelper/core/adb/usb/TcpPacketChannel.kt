@@ -24,6 +24,9 @@ class TcpPacketChannel(host: String, port: Int) : AdbPacketChannel {
     @Volatile
     private var closed = false
 
+    @Volatile
+    private var closedBy: String? = null
+
     init {
         try {
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS)
@@ -43,7 +46,7 @@ class TcpPacketChannel(host: String, port: Int) : AdbPacketChannel {
             output.write(bytes)
             output.flush()
         } catch (e: IOException) {
-            throw if (closed) IOException(CLOSED, e) else e
+            throw if (closed) IOException(closedMessage(), e) else e
         }
     }
 
@@ -58,17 +61,21 @@ class TcpPacketChannel(host: String, port: Int) : AdbPacketChannel {
             ensureOpen()
             return 0
         } catch (e: IOException) {
-            throw if (closed) IOException(CLOSED, e) else e
+            throw if (closed) IOException(closedMessage(), e) else e
         }
     }
 
     override fun close() {
+        if (closedBy == null) closedBy = Thread.currentThread().name
         closed = true
         runCatching { socket.close() }
     }
 
+    /** Names who closed this side, so an error never reads like a mystery "Socket closed". */
+    private fun closedMessage() = "$CLOSED (closed by this app on thread ${closedBy ?: "?"})"
+
     private fun ensureOpen() {
-        if (closed) throw IOException(CLOSED)
+        if (closed) throw IOException(closedMessage())
     }
 
     private companion object {

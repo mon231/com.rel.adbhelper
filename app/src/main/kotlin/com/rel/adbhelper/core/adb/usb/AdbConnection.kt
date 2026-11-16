@@ -46,6 +46,8 @@ class AdbConnection private constructor(
     val peerMaxPayload: Int,
     /** The device's CNXN banner, e.g. `device::ro.product.name=…;features=…`. */
     val peerBanner: String,
+    /** Receives one line when the connection dies (the first cause only). */
+    private val log: (String) -> Unit = ::androidWarn,
 ) {
     private val streams = ConcurrentHashMap<Int, AdbConnectionStream>()
     private val nextLocalId = AtomicInteger(1)
@@ -64,6 +66,10 @@ class AdbConnection private constructor(
     /** False once the connection has died or been closed; it never comes back. */
     val isAlive: Boolean get() = failure == null
 
+    /** Why the connection died, e.g. `reader: Connection reset`, or null while it is alive. The
+     * first cause wins; later failures (a write on the already closed channel) are consequences. */
+    val failureReason: String? get() = failure?.message
+
     /**
      * Opens a stream to [service] (e.g. `shell:ls`). Blocks until the device accepts or refuses.
      * Safe to call from several threads at once.
@@ -75,7 +81,7 @@ class AdbConnection private constructor(
         try {
             // Checked after registering: fail() marks the connection dead before it walks the
             // stream map, so a stream registered too late to be failed by it is caught here.
-            failure?.let { throw IOException("ADB connection is closed", it) }
+            failure?.let { throw lost(it) }
             send(AdbMessage.open(stream.localId, service))
             stream.awaitOpened(service)
         } catch (t: Throwable) {
@@ -88,19 +94,21 @@ class AdbConnection private constructor(
     }
 
     /** Ends the session: closes the channel and fails every open stream. Idempotent. */
-    fun close() = fail(IOException("ADB connection closed"))
+    fun close() = fail(IOException("closed by this app"), "close()")
 
     /** Sends one packet, header and payload as two channel writes, never interleaved with
      * another packet. Any failure leaves the byte stream in an unknown state, so it kills the
      * connection. */
     internal fun send(message: AdbMessage) {
         synchronized(writeLock) {
-            failure?.let { throw IOException("ADB connection is closed", it) }
+            failure?.let { throw lost(it) }
             try {
                 writeMessage(channel, message)
             } catch (e: IOException) {
-                fail(e)
-                throw e
+                fail(e, "writing ${AdbMessage.commandName(message.command)}")
+                // Report the reason the connection died, which may be an earlier one (the
+                // reader's) that closed the channel under this write.
+                throw lost(failure ?: e)
             }
         }
     }
@@ -123,16 +131,20 @@ class AdbConnection private constructor(
         }
     }
 
-    private fun fail(cause: IOException) {
+    private fun lost(reason: IOException) = IOException("ADB connection lost (${reason.message})", reason)
+
+    private fun fail(rawCause: IOException, origin: String) {
+        val cause = IOException("$origin: ${rawCause.message ?: rawCause.javaClass.simpleName}", rawCause)
         synchronized(failureLock) {
             if (failure != null) return
             failure = cause
         }
+        log("connection died, $origin on thread ${Thread.currentThread().name}: $rawCause (${streams.size} open streams)")
         // Not under writeLock: a thread stuck inside channel.write holds it, and closing the
         // channel is exactly what gets that thread out.
         runCatching { channel.close() }
         closeSender.shutdownNow()
-        streams.values.forEach { it.fail(cause) }
+        streams.values.forEach { it.fail(lost(cause)) }
         streams.clear()
     }
 
@@ -141,9 +153,9 @@ class AdbConnection private constructor(
             try {
                 while (true) dispatch(readMessage(channel))
             } catch (e: IOException) {
-                fail(e)
+                fail(e, "reader")
             } catch (t: Throwable) {
-                fail(IOException("ADB reader failed", t))
+                fail(IOException("ADB reader failed: $t", t), "reader")
             }
         }
     }
@@ -197,6 +209,7 @@ class AdbConnection private constructor(
             channel: AdbPacketChannel,
             identity: AdbIdentity,
             onAwaitingAuthorisation: () -> Unit = {},
+            log: (String) -> Unit = ::androidWarn,
         ): AdbConnection {
             try {
                 writeMessage(channel, AdbMessage.connect())
@@ -210,6 +223,7 @@ class AdbConnection private constructor(
                                 channel,
                                 negotiatedMaxPayload(message.arg1),
                                 String(message.payload, Charsets.UTF_8).trimEnd('\u0000'),
+                                log,
                             )
                             connection.startReader()
                             return connection
@@ -315,7 +329,7 @@ class AdbConnectionStream internal constructor(
                     break
                 }
                 if (remoteClosed) return null
-                failure?.let { throw IOException("ADB connection lost", it) }
+                failure?.let { throw it }
                 changed.await()
             }
         }
@@ -380,7 +394,7 @@ class AdbConnectionStream internal constructor(
         lock.withLock {
             while (remoteId == 0) {
                 if (remoteClosed) throw IOException("The device refused to open $service")
-                failure?.let { throw IOException("ADB connection lost while opening $service", it) }
+                failure?.let { throw IOException("${it.message} while opening $service", it) }
                 if (localClosed) throw IOException(STREAM_CLOSED)
                 changed.await()
             }
@@ -421,11 +435,19 @@ class AdbConnectionStream internal constructor(
     private fun checkOpenForWriting() {
         if (localClosed) throw IOException(STREAM_CLOSED)
         if (remoteClosed) throw IOException("The device closed the stream")
-        failure?.let { throw IOException("ADB connection lost", it) }
+        failure?.let { throw it }
     }
 
     private companion object {
         /** Exact text `AdbClient.raw` matches on; do not reword. */
         const val STREAM_CLOSED = "Stream closed."
+    }
+}
+
+/** android.util.Log, unless this runs on the plain JVM (unit tests), where it is not available. */
+internal fun androidWarn(message: String) {
+    try {
+        android.util.Log.w("AdbConnection", message)
+    } catch (_: RuntimeException) {
     }
 }
