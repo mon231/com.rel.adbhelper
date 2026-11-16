@@ -11,6 +11,7 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.File
 import java.math.BigInteger
+import java.security.GeneralSecurityException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
@@ -155,6 +156,8 @@ class AdbKeyConnectionManager private constructor(
         /** 30 years, so the certificate effectively never expires under the app. */
         private const val CERT_VALIDITY_DAYS = 30L * 365
 
+        private const val LOG_TAG = "AdbIdentity"
+
         private val keyLock = Any()
         private var cachedPair: Pair<PrivateKey, Certificate>? = null
 
@@ -164,38 +167,88 @@ class AdbKeyConnectionManager private constructor(
                 cachedPair ?: loadOrGenerateFromDisk(context.filesDir).also { cachedPair = it }
             }
 
-        private fun loadOrGenerateFromDisk(dir: File): Pair<PrivateKey, Certificate> {
-            val keyFile = File(dir, "adb_private.key")
-            val certFile = File(dir, "adb_cert.pem") // holds DER bytes despite the name
-            val loaded = try {
-                if (keyFile.exists() && certFile.exists()) readPair(keyFile, certFile) else null
-            } catch (_: Exception) {
-                null
-            }
-            if (loaded != null) return loaded
-            val (privateKey, certificate) = generateKeyPair()
-            writeAtomically(keyFile, privateKey.encoded)
-            writeAtomically(certFile, certificate.encoded)
-            return privateKey to certificate
+        /** Logs to logcat; tests pass their own. Never given key material. */
+        private fun androidLog(warn: Boolean, message: String) {
+            if (warn) android.util.Log.w(LOG_TAG, message) else android.util.Log.i(LOG_TAG, message)
         }
 
-        /** Null when the files do not form a usable identity (caller regenerates both). */
-        private fun readPair(keyFile: File, certFile: File): Pair<PrivateKey, Certificate>? {
-            val privateKey = KeyFactory.getInstance("RSA")
-                .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
-            var certificate = certFile.inputStream().use {
-                CertificateFactory.getInstance("X.509").generateCertificate(it)
-            } as X509Certificate
-            if (!keysMatch(privateKey, certificate.publicKey)) return null
-            if (certNeedsReissue(certificate.notAfter, Date())) {
-                // Same private key, so devices that already trust this app still recognise it.
-                val crt = privateKey as? RSAPrivateCrtKey ?: return null
-                val publicKey = KeyFactory.getInstance("RSA")
-                    .generatePublic(RSAPublicKeySpec(crt.modulus, crt.publicExponent))
-                certificate = selfSignedCertificate(publicKey, privateKey) as X509Certificate
-                writeAtomically(certFile, certificate.encoded)
+        /**
+         * A readable private key is never replaced: a bad certificate is re-issued from it (see
+         * [identityAction]). Only a missing or unusable key gets a new pair, and then the old
+         * files are kept as `.bak`. An unreadable key file (I/O error) propagates rather than
+         * regenerating.
+         */
+        internal fun loadOrGenerateFromDisk(
+            dir: File,
+            log: (warn: Boolean, message: String) -> Unit = ::androidLog,
+        ): Pair<PrivateKey, Certificate> {
+            val keyFile = File(dir, "adb_private.key")
+            val certFile = File(dir, "adb_cert.pem") // holds DER bytes despite the name
+            val keyExisted = keyFile.exists()
+            val privateKey: RSAPrivateCrtKey? = if (keyExisted) {
+                try {
+                    KeyFactory.getInstance("RSA")
+                        .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes())) as? RSAPrivateCrtKey
+                } catch (_: GeneralSecurityException) {
+                    null
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+            } else {
+                null
             }
-            return privateKey to certificate
+            val certificate: X509Certificate? = if (privateKey != null && certFile.exists()) {
+                try {
+                    certFile.inputStream().use {
+                        CertificateFactory.getInstance("X.509").generateCertificate(it)
+                    } as? X509Certificate
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+            val action = identityAction(
+                keyUsable = privateKey != null,
+                certParses = certificate != null,
+                matches = privateKey != null && certificate != null && keysMatch(privateKey, certificate.publicKey),
+                needsReissue = certificate != null && certNeedsReissue(certificate.notAfter, Date()),
+            )
+            return when (action) {
+                IdentityAction.KEEP -> privateKey!! to certificate!!
+                IdentityAction.REISSUE_CERT -> {
+                    // Same private key, so devices that already trust this app still recognise it.
+                    val publicKey = KeyFactory.getInstance("RSA")
+                        .generatePublic(RSAPublicKeySpec(privateKey!!.modulus, privateKey.publicExponent))
+                    val fresh = selfSignedCertificate(publicKey, privateKey) as X509Certificate
+                    log(false, "Certificate re-issued from the existing key")
+                    try {
+                        writeAtomically(certFile, fresh.encoded)
+                    } catch (e: java.io.IOException) {
+                        log(true, "Could not save the re-issued certificate (${e.javaClass.simpleName}); using it in memory")
+                    }
+                    privateKey to fresh
+                }
+                IdentityAction.REGENERATE -> {
+                    if (keyExisted) {
+                        moveToBackup(keyFile)
+                        moveToBackup(certFile)
+                        log(true, "Private key unreadable or unusable; generated a new identity, old files kept as .bak")
+                    }
+                    val (newKey, newCert) = generateKeyPair()
+                    writeAtomically(keyFile, newKey.encoded)
+                    writeAtomically(certFile, newCert.encoded)
+                    newKey to newCert
+                }
+            }
+        }
+
+        private fun moveToBackup(file: File) {
+            if (!file.exists()) return
+            Files.move(
+                file.toPath(), File(file.parentFile, file.name + ".bak").toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
         }
 
         /** Writes to a temp file in the same directory, then renames over [target]. */
