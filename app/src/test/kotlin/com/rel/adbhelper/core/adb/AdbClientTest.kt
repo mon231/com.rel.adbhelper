@@ -280,6 +280,44 @@ class AdbClientTest {
     }
 
     @Test
+    fun `pullTo treats the library's Stream-closed exception as end of file when all bytes arrived`() = runTest {
+        val payload = ByteArray(10) { it.toByte() }
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:cat '/sdcard/t.txt'" to payload),
+            chunkSize = 4,
+            throwsStreamClosedAtEof = true,
+        )
+        assertTrue(payload.contentEquals(client(transport).pull("/sdcard/t.txt")))
+    }
+
+    @Test
+    fun `pullTo fails with both sizes when Stream-closed cuts the file short`() = runTest {
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:cat '/sdcard/t.txt'" to ByteArray(6)),
+            statOutput = "10",
+            throwsStreamClosedAtEof = true,
+        )
+        val e = assertThrows(IOException::class.java) { kotlinx.coroutines.runBlocking { client(transport).pull("/sdcard/t.txt") } }
+        assertTrue("received 6 bytes but the target file has 10" in e.cause!!.message!!, e.cause!!.message)
+    }
+
+    @Test
+    fun `pullTo still fails on any other IOException`() = runTest {
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:cat '/sdcard/t.txt'" to ByteArray(6)),
+            throwOnServiceRead = IOException("Connection reset"),
+        )
+        val e = assertThrows(IOException::class.java) { kotlinx.coroutines.runBlocking { client(transport).pull("/sdcard/t.txt") } }
+        assertEquals("Connection reset", e.cause!!.message)
+    }
+
+    @Test
+    fun `pullTo fails when stat fails`() = runTest {
+        val transport = FakeAdbTransport(scriptedOutput = "stat: No such file\n", exitCode = 1)
+        assertThrows(IOException::class.java) { kotlinx.coroutines.runBlocking { client(transport).pull("/sdcard/t.txt") } }
+    }
+
+    @Test
     fun `pullTo delivers the file in bounded chunks without ever holding it all at once`() = runTest {
         val payload = ByteArray(10) { it.toByte() }
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/big.bin'" to payload), chunkSize = 4)

@@ -112,6 +112,18 @@ private suspend fun <T> AdbStream.timingOutOnClose(
     }
 }
 
+/** One watchdog-bounded read; the library's confirmed benign `IOException("Stream closed.")` is
+ * returned as end of stream (null), see [AdbClient.raw]'s doc. */
+private suspend fun AdbStream.readChunkOrEof(
+    timeoutMillis: Long,
+    watchdogDispatcher: CoroutineDispatcher,
+    onTimeout: () -> Unit,
+): ByteArray? = try {
+    timingOutOnClose(timeoutMillis, watchdogDispatcher, onTimeout) { readChunk() }
+} catch (e: IOException) {
+    if (e.message == "Stream closed.") null else throw e
+}
+
 class AdbClient(
     private val transport: AdbTransport,
     /** Exposed for tests only, to prove the watchdog-close behavior below without a real 15s wait. */
@@ -156,13 +168,7 @@ class AdbClient(
         try {
             val buffer = java.io.ByteArrayOutputStream()
             while (true) {
-                val chunk = try {
-                    stream.timingOutOnClose(rawChunkTimeoutMillis, watchdogDispatcher, transport::invalidate) {
-                        readChunk()
-                    }
-                } catch (e: IOException) {
-                    if (e.message == "Stream closed.") null else throw e
-                } ?: break
+                val chunk = stream.readChunkOrEof(rawChunkTimeoutMillis, watchdogDispatcher, transport::invalidate) ?: break
                 buffer.write(chunk)
             }
             buffer.toByteArray()
@@ -240,19 +246,32 @@ class AdbClient(
      * Reads a file off the target via `exec:cat`, one chunk at a time into [sink] — never holds
      * the whole file in memory, and (see [push]'s doc) each chunk is individually
      * timeout-bounded rather than the whole transfer.
+     *
+     * Like [raw], the library's confirmed end-of-stream bug (`IOException("Stream closed.")`
+     * instead of a normal EOF) is treated as the end of the file — which would also make a
+     * transfer that was genuinely cut off look complete. So the file's size is read with
+     * `stat -c %s` before the first byte is requested, and the number of bytes delivered to
+     * [sink] must equal it, else an [IOException] naming both is thrown. Rule: a normal static
+     * file; one that grows or shrinks during the transfer fails the check. A `stat` that fails
+     * fails the download.
      */
     suspend fun pullTo(path: String, sink: (ByteArray) -> Unit) {
         try {
+            val expected = shell("stat -c %s ${shellQuote(path)}").outputOrThrow().trim().toLongOrNull()
+                ?: throw IOException("could not read the size of $path")
             val stream = openWithTimeout("exec:cat ${shellQuote(path)}")
+            var received = 0L
             try {
                 while (true) {
-                    val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
-                        readChunk()
-                    } ?: break
+                    val chunk = stream.readChunkOrEof(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) ?: break
                     sink(chunk)
+                    received += chunk.size
                 }
             } finally {
                 stream.close()
+            }
+            if (received != expected) {
+                throw IOException("received $received bytes but the target file has $expected")
             }
         } catch (c: CancellationException) {
             throw c

@@ -40,6 +40,8 @@ class FakeAdbTransport(
      * path's `exec:cat >` service, which is what [AdbClient.push] verifies against. Override to
      * simulate a target that silently dropped the write. */
     private val statOutput: String? = null,
+    /** Like [throwOnRead] but only for [serviceOutputs] streams, so a pull's `stat` still works. */
+    private val throwOnServiceRead: Throwable? = null,
 ) : AdbTransport {
 
     /** Bytes written to each service, for asserting push behavior. */
@@ -59,14 +61,16 @@ class FakeAdbTransport(
         serviceOutputs[service]?.let { bytes ->
             val hangLatch = if (neverSignalsEof) CountDownLatch(1) else null
             return InMemoryAdbStream(
-                bytes, throwOnRead, chunkSize, hangLatch, throwsStreamClosedAtEof,
+                bytes, throwOnServiceRead ?: throwOnRead, chunkSize, hangLatch, throwsStreamClosedAtEof,
                 onWrite = { writtenByService.getOrPut(service) { mutableListOf() }.add(it) },
                 onClose = { closedServices.add(service) },
             )
         }
         val bytes = if (service.startsWith(STAT_PREFIX)) {
             val quotedPath = service.removePrefix(STAT_PREFIX).substringBefore("; echo ")
-            val size = statOutput ?: writtenByService["exec:cat > $quotedPath"].orEmpty().sumOf { it.size }.toString()
+            val size = statOutput
+                ?: serviceOutputs["exec:cat $quotedPath"]?.size?.toString()
+                ?: writtenByService["exec:cat > $quotedPath"].orEmpty().sumOf { it.size }.toString()
             "$size\n__ADBHELPER_EXIT__:0\n".toByteArray(Charsets.UTF_8)
         } else if (omitExitMarker) {
             scriptedOutput.toByteArray(Charsets.UTF_8)
