@@ -380,11 +380,23 @@ class AdbConnectionTest {
     fun `an interrupted readChunk leaves the stream usable`() {
         val peer = ScriptedAdbPeer()
         val s = openStream(connected(peer), peer)
-        val read = async { s.stream.readChunk() }
+        val started = CountDownLatch(1)
+        val interrupted = CountDownLatch(1)
+        val read = async {
+            started.countDown()
+            try {
+                s.stream.readChunk()
+            } catch (_: InterruptedException) {
+                interrupted.countDown()
+            }
+        }
+        assertTrue(started.await(10, TimeUnit.SECONDS))
         read.assertStillRunning()
         read.cancel(true)
+        // cancel() returns before the worker has woken; sending now would let it steal "later".
+        assertTrue(interrupted.await(10, TimeUnit.SECONDS))
         peer.send(AdbMessage.write(s.remoteId, s.localId, "later".toByteArray()))
-        assertArrayEquals("later".toByteArray(), s.stream.readChunk())
+        assertArrayEquals("later".toByteArray(), async { s.stream.readChunk() }.await())
     }
 
     @Test
