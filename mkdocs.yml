@@ -37,8 +37,22 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
-  - Features: features.md
+  - Features:
+      - Overview: features/index.md
+      - Connect: features/connect.md
+      - Device hub: features/hub.md
+      - Info: features/info.md
+      - Apps: features/apps.md
+      - Files: features/files.md
+      - Shell: features/shell.md
+      - Processes: features/processes.md
+      - Logs: features/logs.md
+      - Power: features/power.md
+      - Monitor: features/monitor.md
+      - Mirror: features/mirror.md
+      - Identity and layout: features/platform.md
   - Architecture: architecture.md
+  - Testing: testing.md
   - Known limitations: known-limitations.md
   - Third-party notices: third-party.md
   - Contributing: contributing.md
