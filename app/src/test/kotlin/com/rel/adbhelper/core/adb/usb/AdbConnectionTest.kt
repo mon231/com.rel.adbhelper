@@ -220,12 +220,13 @@ class AdbConnectionTest {
         val peer = ScriptedAdbPeer(pollMillis = 1)
         val future = connect(peer)
         peer.expect(AdbWire.CNXN)
-        // Far more empty reads than any "give up after N" rule would tolerate, mid-handshake.
-        waitFor { peer.emptyReads.get() > 3_000 }
+        // Far more empty reads than any "give up after N" rule would tolerate, mid-handshake
+        // (a few hundred: on Windows a 1 ms poll can take 15 ms, so thousands run into the timeout).
+        waitFor { peer.emptyReads.get() > 400 }
         peer.send(deviceCnxn())
         val connection = future.await().also { connections += it }
         val seen = peer.emptyReads.get()
-        waitFor { peer.emptyReads.get() > seen + 3_000 }
+        waitFor { peer.emptyReads.get() > seen + 400 }
         assertTrue(connection.isAlive)
         val opened = openStream(connection, peer)
         peer.send(AdbMessage.write(opened.remoteId, opened.localId, byteArrayOf(1)))
