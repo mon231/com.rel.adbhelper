@@ -1,5 +1,6 @@
 package com.rel.adbhelper.core.adb
 
+import com.rel.adbhelper.core.session.ConnectionHealth
 import com.rel.adbhelper.core.shell.shellQuote
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -145,24 +146,35 @@ class AdbClient(
     private val log: (String) -> Unit = ::androidWarn,
 ) {
 
+    /** Fed by every command and stream below; see [ConnectionHealth]. */
+    val health = ConnectionHealth()
+
     private fun logFailure(what: String, t: Throwable) = log("$what failed: ${t.javaClass.simpleName}: ${t.message}")
 
     /** [timeoutMillis] bounds each wait for the command's next output, not the whole command —
      * raise it for a command that legitimately prints nothing for a long time (`pm install` of a
      * large APK), which the default would otherwise force-close mid-run. */
     suspend fun shell(command: String, timeoutMillis: Long = commandTimeoutMillis): AdbResult = try {
-        runShell(command, timeoutMillis)
+        runShell(command, timeoutMillis).also { health.reportSuccess() }
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
         logFailure("shell:$command", t)
+        health.reportFailure(t)
         AdbResult.TransportUnreachable(t)
     }
 
     /** Opens a long-lived service stream (e.g. `"shell:"` for a terminal, `"localabstract:<socket>"`
      * for mirroring). The caller owns the stream's lifecycle — not time-bounded, see
      * [COMMAND_TIMEOUT_MILLIS]'s doc. */
-    suspend fun openService(service: String): AdbStream = transport.open(service)
+    suspend fun openService(service: String): AdbStream = try {
+        HealthReportingStream(transport.open(service), health).also { health.reportSuccess() }
+    } catch (c: CancellationException) {
+        throw c
+    } catch (t: Throwable) {
+        health.reportFailure(t)
+        throw t
+    }
 
     /**
      * Reads a raw service's full byte output — no shell exit-marker framing. Reads chunk-by-chunk
@@ -195,7 +207,7 @@ class AdbClient(
                 tail = (tail + recent).let { it.copyOfRange(maxOf(0, it.size - endMarker.size), it.size) }
                 if (tail.contentEquals(endMarker)) break
             }
-            buffer.toByteArray()
+            buffer.toByteArray().also { health.reportSuccess() }
         } finally {
             stream.close()
         }
@@ -203,6 +215,7 @@ class AdbClient(
         throw c
     } catch (t: Throwable) {
         logFailure(service, t)
+        health.reportFailure(t)
         throw IOException("failed to read from $service", t)
     }
 
@@ -366,4 +379,24 @@ class AdbClient(
             stream.close()
         }
     }
+}
+
+/** Reports a stream's transport error to [health]. Errors after the owner's own [close] are
+ * ignored (a read cut off by closing is not a lost link), as is the library's benign end of
+ * stream, see [AdbClient.raw]'s doc. */
+private class HealthReportingStream(private val inner: AdbStream, private val health: ConnectionHealth) : AdbStream {
+    @Volatile private var closed = false
+
+    private inline fun <T> watching(block: () -> T): T = try {
+        block()
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: IOException) {
+        if (!closed && e.message != "Stream closed.") health.reportFailure(e)
+        throw e
+    }
+
+    override suspend fun write(data: ByteArray) = watching { inner.write(data) }
+    override suspend fun readChunk(): ByteArray? = watching { inner.readChunk() }
+    override fun close() { closed = true; inner.close() }
 }

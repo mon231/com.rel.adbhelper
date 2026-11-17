@@ -1,7 +1,21 @@
 package com.rel.adbhelper.device
 
 import androidx.activity.compose.LocalActivity
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import kotlinx.coroutines.launch
+import com.rel.adbhelper.core.adb.describe
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -48,7 +62,7 @@ private val TABS: List<Pair<String, @Composable () -> Unit>> = listOf(
  * labels.
  */
 @Composable
-fun DeviceScreen(modifier: Modifier = Modifier) {
+fun DeviceScreen(onDisconnect: () -> Unit = {}, modifier: Modifier = Modifier) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
 
     // Not on a configuration change (rotation, dark mode): the hub is recomposed straight away
@@ -59,6 +73,16 @@ fun DeviceScreen(modifier: Modifier = Modifier) {
     }
 
     Column(modifier = modifier.fillMaxSize()) {
+        // Navigating away disposes this screen, which detaches the session (DisposableEffect above).
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(DeviceSession.target.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            TextButton(onClick = onDisconnect) { Text("Disconnect") }
+        }
+        ConnectionLostBanner(onDisconnect)
         ScrollableTabRow(selectedTabIndex = selected, edgePadding = 16.dp) {
             TABS.forEachIndexed { index, (title, _) ->
                 Tab(
@@ -71,5 +95,30 @@ fun DeviceScreen(modifier: Modifier = Modifier) {
         // key: each tab gets its own composition, so one tab's remembered state is never reused
         // by another and leaving a tab disposes it.
         key(selected) { TABS[selected].second() }
+    }
+}
+
+/** Shown while the client's [com.rel.adbhelper.core.session.ConnectionHealth] says the link is
+ * lost. Reconnect runs one cheap command; the client reports its outcome, which clears the
+ * banner on success or updates the cause on failure. */
+@Composable
+private fun ConnectionLostBanner(onDisconnect: () -> Unit) {
+    val client = remember { DeviceSession.client } ?: return
+    val lost by client.health.lost.collectAsState()
+    val cause = lost ?: return
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text("Connection lost", style = MaterialTheme.typography.titleSmall)
+            Text(cause.describe(), style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            Row {
+                TextButton(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch { client.shell("echo ok"); busy = false }
+                }) { Text("Reconnect") }
+                TextButton(onClick = onDisconnect) { Text("Disconnect") }
+            }
+        }
     }
 }

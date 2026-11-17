@@ -33,7 +33,7 @@ fun AppNavHost(
             if (DeviceSession.client == null) {
                 LaunchedEffect(Unit) { navController.popBackStack(ROUTE_CONNECT, inclusive = false) }
             } else {
-                DeviceScreen()
+                DeviceScreen(onDisconnect = { navController.popBackStack(ROUTE_CONNECT, inclusive = false) })
             }
         }
     }
