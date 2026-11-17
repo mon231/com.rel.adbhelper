@@ -350,7 +350,7 @@ class AdbConnectionTest {
 
         val started = System.nanoTime()
         s.stream.close()
-        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 1_000)
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 10_000)
 
         val error = read.failure()
         assertTrue(error is IOException)

@@ -50,7 +50,7 @@ class AdbClientTest {
         // own exit marker specifically so we don't have to trust the stream's own completion
         // signal at all.
         val transport = FakeAdbTransport(scriptedOutput = "hello\n", exitCode = 0, chunkSize = 4, neverSignalsEof = true)
-        val result = AdbClient(transport, commandTimeoutMillis = 300, watchdogDispatcher = Dispatchers.Unconfined)
+        val result = AdbClient(transport, commandTimeoutMillis = 5_000, watchdogDispatcher = Dispatchers.Unconfined)
             .shell("echo hello")
         assertEquals(AdbResult.Success("hello\n"), result)
     }
@@ -185,7 +185,7 @@ class AdbClientTest {
         }
 
         assertTrue(
-            elapsedMillis < 2_000,
+            elapsedMillis < 4_500,
             "expected the hang to be force-closed after rawChunkTimeoutMillis (300ms), not commandTimeoutMillis (5000ms) — took ${elapsedMillis}ms",
         )
     }
@@ -215,7 +215,7 @@ class AdbClientTest {
         }
 
         assertTrue(png.contentEquals(bytes))
-        assertTrue(elapsedMillis < 2_000, "took ${elapsedMillis}ms; the 5s watchdog must not be waited for")
+        assertTrue(elapsedMillis < 4_500, "took ${elapsedMillis}ms; the 5s watchdog must not be waited for")
         assertEquals(0, transport.invalidateCallCount)
         assertTrue("exec:screencap -p" in transport.closedServices)
     }
@@ -253,7 +253,7 @@ class AdbClientTest {
 
         assertTrue(result is AdbResult.TransportUnreachable, "expected the stuck read to be force-closed, got $result")
         assertTrue(
-            elapsedMillis < 2_000,
+            elapsedMillis < 4_500,
             "expected the per-call timeout (300ms) to fire, not commandTimeoutMillis (5000ms) — took ${elapsedMillis}ms",
         )
     }

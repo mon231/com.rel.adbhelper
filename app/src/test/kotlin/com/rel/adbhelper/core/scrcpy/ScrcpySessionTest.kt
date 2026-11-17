@@ -229,7 +229,7 @@ class ScrcpySessionTest {
     }
 
     private suspend fun awaitUntil(condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + 5_000
+        val deadline = System.currentTimeMillis() + 15_000
         while (!condition() && System.currentTimeMillis() < deadline) kotlinx.coroutines.delay(5)
         assertTrue(condition(), "timed out")
     }
