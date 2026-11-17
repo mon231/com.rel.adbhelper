@@ -59,6 +59,15 @@ class AdbConnection private constructor(
     private val receivedPackets = AtomicLong()
     private val receivedBytes = AtomicLong()
 
+    /** When the reader last finished a packet, and when the write now in progress (0 = none)
+     * began, both in [System.nanoTime] units: they say, when the connection dies, whether it
+     * was the reading or the writing side that had stopped moving. */
+    @Volatile private var lastReadNanos = System.nanoTime()
+    @Volatile private var writeStartedNanos = 0L
+
+    /** (our id, device id) pairs already told to close because the device kept talking on them. */
+    private val rejectedStreams = ConcurrentHashMap.newKeySet<Long>()
+
     /** Sends the CLSE of streams closed locally — off the caller's thread, because
      * [AdbConnectionStream.close] must never block (it is called from UI and watchdog code). */
     private val closeSender: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -108,7 +117,9 @@ class AdbConnection private constructor(
         synchronized(writeLock) {
             failure?.let { throw lost(it) }
             try {
+                writeStartedNanos = System.nanoTime()
                 writeMessage(channel, message)
+                writeStartedNanos = 0
                 sentPackets.incrementAndGet()
                 sentBytes.addAndGet(message.payload.size.toLong())
             } catch (e: IOException) {
@@ -146,8 +157,11 @@ class AdbConnection private constructor(
             if (failure != null) return
             failure = cause
         }
-        log("connection died, $origin on thread ${Thread.currentThread().name}: $rawCause (${streams.size} open streams; sent $sentPackets packets/$sentBytes payload bytes, " +
-            "received $receivedPackets packets/$receivedBytes)")
+        val now = System.nanoTime()
+        val writing = writeStartedNanos.let { if (it == 0L) "no write in progress" else "a write has been blocked for ${(now - it) / 1_000_000} ms" }
+        log("connection died, $origin on thread ${Thread.currentThread().name}: $rawCause (${streams.size} open streams ${streams.keys.sorted()}; " +
+            "sent $sentPackets packets/$sentBytes payload bytes, received $receivedPackets packets/$receivedBytes; " +
+            "$writing; reader last got a packet ${(now - lastReadNanos) / 1_000_000} ms ago)")
         // Not under writeLock: a thread stuck inside channel.write holds it, and closing the
         // channel is exactly what gets that thread out.
         runCatching { channel.close() }
@@ -163,6 +177,7 @@ class AdbConnection private constructor(
                     val message = readMessage(channel)
                     receivedPackets.incrementAndGet()
                     receivedBytes.addAndGet(message.payload.size.toLong())
+                    lastReadNanos = System.nanoTime()
                     dispatch(message)
                 }
             } catch (e: IOException) {
@@ -187,7 +202,7 @@ class AdbConnection private constructor(
                 when {
                     stream == null -> rejectUnknownStream(localId, remoteId)
                     // Nothing to queue, so nothing would ever be consumed: acknowledge right away.
-                    message.payload.isEmpty() -> send(AdbMessage.okay(localId, remoteId))
+                    message.payload.isEmpty() -> sendFromReader(AdbMessage.okay(localId, remoteId))
                     else -> stream.onData(message.payload)
                 }
             }
@@ -200,9 +215,30 @@ class AdbConnection private constructor(
     }
 
     /** A packet for a stream we no longer have (closed locally, or an OPEN we gave up on): tell
-     * the device to drop its end. Never done in reply to a CLSE, so this cannot ping-pong. */
+     * the device to drop its end, once per stream however much more it sends. Never done in
+     * reply to a CLSE, so this cannot ping-pong. */
     private fun rejectUnknownStream(localId: Int, remoteId: Int) {
-        if (remoteId != 0) send(AdbMessage.close(localId, remoteId))
+        if (remoteId == 0 || !rejectedStreams.add((localId.toLong() shl 32) or (remoteId.toLong() and 0xffffffffL))) return
+        sendFromReader(AdbMessage.close(localId, remoteId))
+    }
+
+    /**
+     * The reader must never wait for a write: a write blocks when the device is not reading, the
+     * device may not be reading because it is blocked writing to us, and only the reader drains
+     * that. So what the reader has to answer is queued to the sender thread instead.
+     */
+    private fun sendFromReader(message: AdbMessage) {
+        try {
+            closeSender.execute {
+                try {
+                    send(message)
+                } catch (_: IOException) {
+                    // The connection is gone.
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            // Connection already shut down.
+        }
     }
 
     companion object {
@@ -462,5 +498,6 @@ internal fun androidWarn(message: String) {
     try {
         android.util.Log.w("AdbConnection", message)
     } catch (_: RuntimeException) {
+        System.err.println("AdbConnection: $message")
     }
 }

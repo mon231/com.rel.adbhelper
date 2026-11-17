@@ -518,6 +518,47 @@ class AdbConnectionTest {
         assertEquals(s.remoteId, close.arg1)
     }
 
+    /** A channel whose writes can be made to block, as a socket whose send buffer is full. */
+    private class GatedChannel(private val inner: ScriptedAdbPeer) : AdbPacketChannel by inner {
+        @Volatile var gate: CountDownLatch? = null
+
+        override fun write(bytes: ByteArray) {
+            gate?.let { while (!it.await(20, TimeUnit.MILLISECONDS)) if (inner.isClosed) throw IOException("channel closed") }
+            inner.write(bytes)
+        }
+    }
+
+    @Test
+    fun `the reader keeps reading while a writer is blocked, and answers a stream it forgot only once`() {
+        val peer = ScriptedAdbPeer()
+        val channel = GatedChannel(peer)
+        val connecting = async { AdbConnection.connect(channel, FakeIdentity(), log = {}) }
+        peer.expect(AdbWire.CNXN)
+        peer.send(deviceCnxn())
+        val connection = connecting.await().also { connections += it }
+        val s = openStream(connection, peer)
+
+        // The device stopped reading: our next write blocks inside the channel.
+        val gate = CountDownLatch(1)
+        channel.gate = gate
+        val blockedWrite = async { s.stream.write("payload".toByteArray()) }
+        blockedWrite.assertStillRunning()
+
+        // Meanwhile the device keeps sending on a stream we do not have (a closed video stream).
+        repeat(3) { peer.send(AdbMessage.write(77, 5, ByteArray(100))) }
+        // The reader must not be stuck answering them: the live stream's CLSE is still processed.
+        peer.send(AdbMessage.close(s.remoteId, s.localId))
+        assertNull(async { s.stream.readChunk() }.await())
+
+        gate.countDown()
+        val sent = List(2) { peer.expect() }
+        assertEquals(1, sent.count { it.command == AdbWire.WRTE }, sent.toString())
+        // Exactly one CLSE for the unknown stream (device id 77), however often the device wrote to it.
+        assertEquals(1, sent.count { it.command == AdbWire.CLSE && it.arg0 == 5 && it.arg1 == 77 })
+        peer.expectSilence()
+        assertTrue(blockedWrite.failure() is IOException)
+    }
+
     @Test
     fun `close ends the session and fails open streams`() {
         val peer = ScriptedAdbPeer()
