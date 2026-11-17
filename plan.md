@@ -6,14 +6,23 @@ record of what was done.
 ## Where things stand
 
 - Branch `dev`, based on `main` (`2e7c7bb`).
-- `bash ./gradlew build` passes (248 unit tests, lint, debug and release variants).
+- `bash ./gradlew build` passes (294 unit tests, lint, debug and release variants).
 - All planned code work is merged: audit fixes, Logs tab, mDNS discovery, USB-OTG transport,
   scrcpy mirroring, forced left-to-right layout, protected ADB identity.
 - Tested by hand on two Android 17 (API 37) emulators, app on one and target on the other, over
   the network (2026-11-16): upgrade over an older build keeps the ADB key; Connect, Scan, Pair
   dialog, USB dialog (no device); Info, Apps, Files, Shell, Processes, Logs, Power, Monitor and
   Mirror; rotation, process death, Hebrew system locale (app stays left-to-right).
-- **Not run on real hardware**, and USB-OTG has only been tested against a simulated device.
+- The app's own ADB protocol stack (what USB-OTG uses) has been run against a real `adbd` over
+  TCP, which speaks the same wire protocol as USB:
+  - `RealAdbdIntegrationTest` (opt-in, `ADBHELPER_REAL_ADBD=host:port`, see
+    `docs/contributing.md`): 11 cases pass, including key authorisation, 32 MiB transfers, three
+    simultaneous streams, reconnect, and a real scrcpy session.
+  - The whole app through the debug-only "Own stack (debug)" button: connect with the app's real
+    key, Info, Apps, Files (28 MB upload and download, checksums match), Shell, Processes, Logs,
+    Power, Monitor, Mirror with touch.
+- **Not run on real hardware.** The only untested USB code is the thin adapter over
+  `UsbDeviceConnection.bulkTransfer` and the Android USB permission flow.
 
 ## Conventions
 
@@ -39,9 +48,30 @@ the Logs stream cannot corrupt a concurrent open, and nothing in the Logs/Shell 
 `markPoisoned` (only the watchdogs do, and the Logs stream has none). Failures now carry their
 cause on screen and in logcat (tag `AdbClient`); if it recurs, read that text first.
 
-**1c. One unexplained stall of the large upload path** (the same event as 1a): a write blocked
+**1c. One unexplained stall of the large upload path** on the library transport: a write blocked
 longer than the 15 s watchdog mid-transfer. If it recurs, check whether it is the emulator link or
 the library's flow control before changing the timeout.
+
+**1d. Own stack: a command stalled right after leaving Mirror (seen once, not reproduced).**
+Over the "Own stack" button, leaving the Mirror tab and opening Power left `wm density`
+unanswered for 15 s; the watchdog closed the connection and, at the time, the transport never
+recovered. Fixed since: a reconnect can no longer hang (10 s handshake bound, failed attempts are
+cleared) and the reader thread no longer blocks on a write (a real deadlock path, not proven to
+be the cause). The stall itself did not recur in 14 host-driven rounds and one in-app round, but
+the target emulator was overloaded (load average 17 to 35) for most later attempts, so this is
+not confirmed fixed. If it recurs, logcat tag `AdbConnection` now says which streams were open,
+whether a write was blocked and when the reader last heard from the device.
+
+**1e. Quick re-open of Mirror may fail to start.** The scrcpy server runs with `cleanup=true` and
+deletes `/data/local/tmp/scrcpy-server.jar` when it exits; a server still shutting down can
+delete the jar the next session just pushed (`ensureServerJar` pushes only when the size
+differs). Not observed in the app; found by reading. Fix in `core/scrcpy/ScrcpySession.kt`
+(wait for the old server to exit, or push under a per-session name).
+
+**1f. Emulator-to-emulator connections are dropped after large transfers.** Both transports show
+it (`adbd: connection terminated: read failed`, then `Software caused connection abort` on the
+app side) with no stream open; the app reconnects by itself. Believed to be the emulators'
+user-mode networking, not the app. Re-check on real devices before spending time on it.
 
 ---
 
@@ -65,13 +95,17 @@ Connect:
 - [ ] Pair with a real code; the dialog pre-fills the address when one device offers pairing.
 - [ ] Fresh install, press Scan first, then pair and connect: the identity is consistent.
 
-USB-OTG (never run on hardware):
+USB-OTG (protocol proven against a real `adbd` over TCP; the USB transfers and the Android
+permission prompt have never run):
+- [ ] The device list shows an attached target and Android's "allow access to the USB device"
+      prompt appears.
 - [ ] First connection shows the target's Allow prompt; Cancel while waiting works.
 - [ ] Reconnect without a prompt; every tab works; pulling the cable shows an error, not a hang.
 - [ ] Leaving the hub releases the device (another app, or a second connect, can claim it).
 - [ ] A controlling phone on Android 8 to 11 (API 26 to 30).
-- [ ] If a device rejects the handshake: advertise version `0x01000001` and skip the checksum
-      check when the peer's version is at least that (`core/adb/usb/AdbMessage.kt`).
+- [ ] Older targets: Android 17's `adbd` answers our version `0x01000000` with correct
+      checksums; if some device rejects the handshake, advertise `0x01000001` and skip the
+      checksum check when the peer's version is at least that (`core/adb/usb/AdbMessage.kt`).
 
 Mirror (works on the emulator: video, touch, Back, Home, server stops on leaving):
 - [ ] Real devices and older Android versions; a USB target.
