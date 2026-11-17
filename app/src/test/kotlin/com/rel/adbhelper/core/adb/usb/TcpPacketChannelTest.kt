@@ -60,6 +60,43 @@ class TcpPacketChannelTest {
     }
 
     @Test
+    fun `a timeout in the middle of a packet loses no bytes`() {
+        val channel = channel()
+        val out = peer().getOutputStream()
+        out.write(byteArrayOf(1, 2, 3)); out.flush()
+        val received = ByteArray(8)
+        var got = 0
+        var empty = 0
+        val finisher = pool.submit {
+            Thread.sleep(2_300) // two full read timeouts with 3 of 8 bytes already delivered
+            out.write(byteArrayOf(4, 5, 6, 7, 8)); out.flush()
+        }
+        while (got < received.size) {
+            val count = channel.read(received, got, received.size - got)
+            if (count == 0) empty++ else got += count
+        }
+        finisher.get()
+        assertTrue(empty >= 1, "expected at least one timed out read, got $empty")
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8), received)
+        channel.close()
+    }
+
+    @Test
+    fun `an end of stream that arrives only after the timeout is not mistaken for one`() {
+        assertTrue(TcpPacketChannel.looksLikeTimeout(1_000, 1_000))
+        assertTrue(TcpPacketChannel.looksLikeTimeout(760, 1_000))
+        assertTrue(!TcpPacketChannel.looksLikeTimeout(3, 1_000))
+    }
+
+    @Test
+    fun `a channel this side closed says who closed it`() {
+        val channel = channel()
+        channel.close()
+        val error = assertThrows(IOException::class.java) { channel.write(ByteArray(1)) }
+        assertTrue(error.message!!.contains("closed by this app"), error.message)
+    }
+
+    @Test
     fun `close from another thread ends a blocked read`() {
         val channel = channel()
         val reader = pool.submit<Throwable?> {

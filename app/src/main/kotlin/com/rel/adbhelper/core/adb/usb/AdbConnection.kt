@@ -6,6 +6,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 import kotlin.concurrent.withLock
@@ -53,6 +54,10 @@ class AdbConnection private constructor(
     private val nextLocalId = AtomicInteger(1)
     private val writeLock = Any()
     private val failureLock = Any()
+    private val sentPackets = AtomicLong()
+    private val sentBytes = AtomicLong()
+    private val receivedPackets = AtomicLong()
+    private val receivedBytes = AtomicLong()
 
     /** Sends the CLSE of streams closed locally — off the caller's thread, because
      * [AdbConnectionStream.close] must never block (it is called from UI and watchdog code). */
@@ -104,6 +109,8 @@ class AdbConnection private constructor(
             failure?.let { throw lost(it) }
             try {
                 writeMessage(channel, message)
+                sentPackets.incrementAndGet()
+                sentBytes.addAndGet(message.payload.size.toLong())
             } catch (e: IOException) {
                 fail(e, "writing ${AdbMessage.commandName(message.command)}")
                 // Report the reason the connection died, which may be an earlier one (the
@@ -139,7 +146,8 @@ class AdbConnection private constructor(
             if (failure != null) return
             failure = cause
         }
-        log("connection died, $origin on thread ${Thread.currentThread().name}: $rawCause (${streams.size} open streams)")
+        log("connection died, $origin on thread ${Thread.currentThread().name}: $rawCause (${streams.size} open streams; sent $sentPackets packets/$sentBytes payload bytes, " +
+            "received $receivedPackets packets/$receivedBytes)")
         // Not under writeLock: a thread stuck inside channel.write holds it, and closing the
         // channel is exactly what gets that thread out.
         runCatching { channel.close() }
@@ -151,7 +159,12 @@ class AdbConnection private constructor(
     private fun startReader() {
         thread(name = "adb-usb-reader", isDaemon = true) {
             try {
-                while (true) dispatch(readMessage(channel))
+                while (true) {
+                    val message = readMessage(channel)
+                    receivedPackets.incrementAndGet()
+                    receivedBytes.addAndGet(message.payload.size.toLong())
+                    dispatch(message)
+                }
             } catch (e: IOException) {
                 fail(e, "reader")
             } catch (t: Throwable) {

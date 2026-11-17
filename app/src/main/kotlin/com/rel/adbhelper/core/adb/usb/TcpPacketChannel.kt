@@ -53,9 +53,17 @@ class TcpPacketChannel(host: String, port: Int) : AdbPacketChannel {
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         ensureOpen()
         if (length <= 0) return 0
+        val started = System.nanoTime()
         try {
             val count = input.read(buffer, offset, length)
-            if (count < 0) throw IOException("The connection was closed by the peer")
+            if (count < 0) {
+                val waited = (System.nanoTime() - started) / 1_000_000
+                // A runtime that reports an expired read timeout as end of stream would otherwise
+                // kill a healthy idle connection. A real end of stream is returned again at once
+                // by the next read, so treating a late one as "nothing this time" costs nothing.
+                if (looksLikeTimeout(waited, READ_TIMEOUT_MILLIS)) return 0
+                throw IOException("The connection was closed by the peer (end of stream after $waited ms)")
+            }
             return count
         } catch (_: SocketTimeoutException) {
             ensureOpen()
@@ -78,7 +86,12 @@ class TcpPacketChannel(host: String, port: Int) : AdbPacketChannel {
         if (closed) throw IOException(closedMessage())
     }
 
-    private companion object {
+    internal companion object {
+        /** True if a read that came back after [waitedMillis] with "end of stream" may really have
+         * been the [timeoutMillis] expiring. */
+        fun looksLikeTimeout(waitedMillis: Long, timeoutMillis: Int): Boolean =
+            waitedMillis >= timeoutMillis * 3 / 4
+
         const val READ_TIMEOUT_MILLIS = 1_000
         const val CONNECT_TIMEOUT_MILLIS = 5_000
         const val CLOSED = "TCP channel closed"
