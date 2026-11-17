@@ -49,9 +49,6 @@ Wave 1 (parallel, no shared files):
 - **B. UI tests on `Pixel_10_Pro`** (owner agreed; the run uninstalls the app there, so the
   target must authorise once more). Run `connectedDebugAndroidTest`; fix failing tests or the
   app bug they show. Touches `androidTest` and whatever the bug is in.
-- **C. Disconnect and connection-lost banner** (`device/DeviceScreen.kt`, `core/session/`,
-  `navigation/`). Disconnect action on the hub; a banner when the transport drops, with Reconnect.
-  Needs a unit test for the session state and a UI test in `androidTest`.
 
 Wave 2 (after C is merged, because it changes the session API):
 - **D. Reconnect keeps the tab.** Reconnect from the banner returns to the same tab.
@@ -159,8 +156,7 @@ keep installing over `v0.1.0`.
 
 ## Later (not scheduled)
 
-Auto-reconnect and a "connection lost" banner on the hub; a Disconnect action; ADB handshake
-check for mDNS-found targets; several device sessions; shell command history; file multi-select;
+ADB handshake check for mDNS-found targets; several device sessions; shell command history; file multi-select;
 APK extract and app backup; mirror audio and clipboard; R8 minification (APK size); keeping view
 models across rotation (androidx `ViewModel`); storing the ADB private key in the Android
 Keystore; fastboot.
