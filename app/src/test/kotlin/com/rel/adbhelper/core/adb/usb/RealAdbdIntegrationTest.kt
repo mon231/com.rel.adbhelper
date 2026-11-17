@@ -7,6 +7,9 @@ import com.rel.adbhelper.core.image.isCompletePng
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterAll
@@ -231,6 +234,93 @@ class RealAdbdIntegrationTest {
             }
         } finally {
             client.shell("rm -f $path")
+        }
+    }
+
+    @Test
+    @Order(11)
+    fun `closing a scrcpy session leaves the connection serving, and it recovers after invalidate`() = runBlocking {
+        val jar = File("src/main/assets/scrcpy-server.jar").let { if (it.exists()) it else File("app/src/main/assets/scrcpy-server.jar") }
+        assertTrue(jar.exists(), "scrcpy-server.jar not found at ${jar.absolutePath}")
+        val rounds = (System.getenv("ADBHELPER_SCRCPY_ROUNDS") ?: "3").toInt()
+        repeat(rounds) { round ->
+            // Starting the server is not what is under test, and on a busy emulator pushing the
+            // jar or starting app_process sometimes fails: retry that part with a fresh session.
+            var session: com.rel.adbhelper.core.scrcpy.ScrcpySession? = null
+            for (attempt in 1..3) {
+                val candidate = com.rel.adbhelper.core.scrcpy.ScrcpySession(
+                    openLink = { com.rel.adbhelper.core.scrcpy.ScrcpyLink(client) },
+                    loadServerJar = { jar.readBytes() },
+                    // A busy emulator takes many seconds to start app_process.
+                    connectAttempts = 150,
+                    preambleTimeoutMillis = 30_000,
+                )
+                try {
+                    withTimeout(60_000) { candidate.start() }
+                    session = candidate
+                    break
+                } catch (e: IOException) {
+                    println("[$ENV] round $round: start attempt $attempt failed: ${e.message}")
+                    if (attempt == 3) throw e
+                    delay(3_000)
+                }
+            }
+            val live = session!!
+            var packets = 0
+            var bytes = 0L
+            // A static screen sends no frames after the first, so the control messages (recents
+            // and home keys) make the screen change while the video is being read.
+            val driver = launch(Dispatchers.IO) {
+                var key = 187
+                while (true) {
+                    live.sendControl(com.rel.adbhelper.core.scrcpy.ControlMessages.injectKeycode(0, key))
+                    live.sendControl(com.rel.adbhelper.core.scrcpy.ControlMessages.injectKeycode(1, key))
+                    key = if (key == 187) 3 else 187
+                    delay(250)
+                }
+            }
+            withTimeoutOrNull(2_500) {
+                while (true) {
+                    val p = live.readPacket()
+                    packets++
+                    if (p is com.rel.adbhelper.core.scrcpy.ScrcpyProtocol.VideoPacket.Media) bytes += p.data.size
+                }
+            }
+            if (round % 2 == 1) {
+                // A slow decoder: stop reading while the screen keeps changing, so the device has
+                // a WRTE outstanding and frames queued when the session is closed.
+                delay(2_000)
+            }
+            driver.cancel()
+            repeat(3) {
+                live.sendControl(com.rel.adbhelper.core.scrcpy.ControlMessages.injectKeycode(0, 3))
+                live.sendControl(com.rel.adbhelper.core.scrcpy.ControlMessages.injectKeycode(1, 3))
+            }
+            println("[$ENV] round $round: $packets video packets, $bytes media bytes")
+            withTimeout(10_000) { live.close().join() }
+            for (i in 0..10) {
+                val started = System.nanoTime()
+                val r = try {
+                    withTimeout(12_000) { client.shell(if (i == 0) "wm density" else "echo n$i") }
+                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                    // Diagnose: is the whole connection stuck, or only this command?
+                    val probe = runCatching { withTimeout(5_000) { client.shell("echo probe") } }
+                    println("[$ENV] round $round command $i TIMED OUT; a plain echo then gives: $probe; connection alive=${runCatching { transport.connect().isAlive }}")
+                    throw e
+                }
+                assertTrue(r is AdbResult.Success, "round $round command $i: $r")
+                println("[$ENV] round $round command $i answered in ${(System.nanoTime() - started) / 1_000_000} ms")
+            }
+            transport.invalidate()
+            val after = withTimeout(10_000) { client.shell("echo recovered") }
+            assertTrue(after is AdbResult.Success, "round $round after invalidate: $after")
+            // The server deletes its own jar when it exits (cleanup=true): a server still dying
+            // from this round would delete the jar the next round pushes, so wait for it.
+            val closedAt = System.nanoTime()
+            withTimeout(120_000) {
+                while ((client.shell("ps -A | grep -c '[a]pp_process'; true") as? AdbResult.Success)?.output?.trim() != "0") delay(300)
+            }
+            println("[$ENV] round $round: scrcpy server gone ${(System.nanoTime() - closedAt) / 1_000_000} ms after the close")
         }
     }
 
