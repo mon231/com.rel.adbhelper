@@ -8,8 +8,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * [AdbTransport] over one ADB-over-USB connection, shared by every stream (the protocol
@@ -19,12 +22,17 @@ import java.io.IOException
  * [openChannel] is called once per connection attempt and must return a fresh channel each
  * time. The attempt runs in this transport's own scope, so a caller that gives up waiting
  * (cancelled, timed out) neither aborts it nor starts a second one next to it; a handshake
- * that waits for the user to accept the device's prompt is ended by [close].
+ * that waits for the user to accept the device's prompt is ended by [close]. Every other
+ * handshake is bounded by [handshakeTimeoutMillis], so an attempt can never stay pending forever.
  */
 class UsbAdbTransport(
     private val openChannel: () -> AdbPacketChannel,
     private val identity: AdbIdentity,
     private val onAwaitingAuthorisation: () -> Unit = {},
+    /** How long a handshake may take before the device starts waiting for the user. A device
+     * that has not answered by then is not going to (a connection that went stale, a device
+     * that is busy booting): the attempt is ended so the next [open] starts a fresh one. */
+    private val handshakeTimeoutMillis: Long = 10_000,
 ) : AdbTransport {
 
     private val lock = Any()
@@ -81,9 +89,32 @@ class UsbAdbTransport(
             }
             attempt = channel
         }
+        val waitingForUser = AtomicBoolean(false)
+        val settled = AtomicBoolean(false) // whoever sets it first (the handshake or the watchdog) decides
+        val timedOut = AtomicBoolean(false)
+        val watchdog = scope.launch {
+            delay(handshakeTimeoutMillis)
+            if (!waitingForUser.get() && settled.compareAndSet(false, true)) {
+                timedOut.set(true)
+                channel.close()
+            }
+        }
         val established = try {
-            AdbConnection.connect(channel, identity, onAwaitingAuthorisation)
+            AdbConnection.connect(channel, identity, { waitingForUser.set(true); onAwaitingAuthorisation() }).also {
+                if (!settled.compareAndSet(false, true)) {
+                    // The watchdog closed the channel just as the handshake finished.
+                    it.close()
+                    throw IOException("handshake finished as its time limit expired")
+                }
+            }
+        } catch (e: IOException) {
+            if (timedOut.get()) {
+                throw IOException("The device did not complete the ADB handshake within ${handshakeTimeoutMillis / 1000.0} s", e)
+            }
+            throw e
         } finally {
+            settled.set(true) // (the handshake failed or finished: the watchdog has nothing left to do)
+            watchdog.cancel()
             synchronized(lock) { if (attempt === channel) attempt = null }
         }
         synchronized(lock) {

@@ -68,6 +68,55 @@ class UsbAdbTransportTest {
     }
 
     @Test
+    fun `a handshake the device never answers ends by itself and the next open starts a fresh one`() = blocking {
+        val transport = UsbAdbTransport(
+            openChannel = { ScriptedAdbPeer().also { channels += it } },
+            identity = FakeIdentity(),
+            onAwaitingAuthorisation = { awaiting.incrementAndGet() },
+            handshakeTimeoutMillis = 300,
+        ).also { transports += it }
+
+        // First attempt: the device never answers the CNXN.
+        val first = async(Dispatchers.Default) { runCatching { transport.open("shell:a") } }
+        channel(0).expect(AdbWire.CNXN)
+        val error = withTimeout(10_000) { first.await() }.exceptionOrNull()
+        assertTrue(error is IOException, "got $error")
+        assertTrue(error!!.message!!.contains("handshake"), error.message)
+        assertTrue(channel(0).awaitClosed())
+        assertEquals(0, awaiting.get())
+
+        // The next open starts a new attempt on a new channel and succeeds.
+        val second = async(Dispatchers.Default) { transport.open("shell:b") }
+        channel(1).accept()
+        channel(1).acceptStream()
+        second.await().close()
+        assertEquals(2, channels.size)
+    }
+
+    @Test
+    fun `a handshake waiting for the user is not cut short`() = blocking {
+        val transport = UsbAdbTransport(
+            openChannel = { ScriptedAdbPeer().also { channels += it } },
+            identity = FakeIdentity(),
+            onAwaitingAuthorisation = { awaiting.incrementAndGet() },
+            handshakeTimeoutMillis = 200,
+        ).also { transports += it }
+        val connecting = async(Dispatchers.Default) { transport.connect() }
+        val device = channel(0)
+        device.expect(AdbWire.CNXN)
+        device.send(AdbMessage(AdbWire.AUTH, AdbWire.AUTH_TOKEN, 0, ByteArray(20)))
+        device.expect(AdbWire.AUTH) // the signature
+        device.send(AdbMessage(AdbWire.AUTH, AdbWire.AUTH_TOKEN, 0, ByteArray(20)))
+        device.expect(AdbWire.AUTH) // the public key: now the device asks its user
+        // Several multiples of the time limit pass while the user has not tapped yet.
+        Thread.sleep(800)
+        assertEquals(1, awaiting.get())
+        assertTrue(!device.isClosed)
+        device.send(deviceCnxn())
+        assertTrue(withTimeout(10_000) { connecting.await() }.isAlive)
+    }
+
+    @Test
     fun `connects lazily on the first open`() = blocking {
         val transport = transport()
         assertEquals(0, channels.size)
