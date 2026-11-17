@@ -52,10 +52,13 @@ internal class ScriptedTransport(
     val control: QueueStream,
     /** How many socket opens are refused before the server "starts listening". */
     var refuseSocketOpens: Int = 0,
+    /** The first server launch finds the jar gone (a previous server's cleanup deleted it) and exits. */
+    var jarDeletedBeforeFirstLaunch: Boolean = false,
 ) : AdbTransport {
     val opened = mutableListOf<String>()
     val pushed = QueueStream()
     private var socketOpens = 0
+    private var launches = 0
 
     override suspend fun open(service: String): AdbStream {
         opened.add(service)
@@ -68,9 +71,13 @@ internal class ScriptedTransport(
                     pushed.write(data)
                 }
             }
-            service.startsWith("shell:CLASSPATH=") -> server
+            service.startsWith("shell:CLASSPATH=") ->
+                if (jarDeletedBeforeFirstLaunch && launches++ == 0) {
+                    remoteJarSize = 0
+                    QueueStream("Error: Could not find or load main class\n".toByteArray()).also { it.endOfStream() }
+                } else server
             service == ScrcpyProtocol.socketService(scid) -> {
-                if (socketOpens++ < refuseSocketOpens) throw IOException("closed")
+                if (socketOpens++ < refuseSocketOpens || (jarDeletedBeforeFirstLaunch && remoteJarSize == 0L)) throw IOException("closed")
                 val which = ++acceptedSockets
                 if (which == 1) video else {
                     // The server sends the device name and codec id only once control is accepted.
@@ -161,6 +168,17 @@ class ScrcpySessionTest {
         val s = newSession(t)
         s.start()
         assertTrue(t.opened.none { it.startsWith("exec:cat") }, t.opened.toString())
+        s.close().join()
+    }
+
+    @Test
+    fun `a server that finds its jar deleted by the previous server is retried after pushing again`() = run {
+        val t = transport(remoteJarSize = jar.size.toLong())
+        t.jarDeletedBeforeFirstLaunch = true
+        val s = newSession(t)
+        assertEquals("Test phone", s.start())
+        assertEquals(jar.size.toLong(), t.remoteJarSize)
+        assertEquals(2, t.opened.count { it.startsWith("shell:CLASSPATH=") })
         s.close().join()
     }
 

@@ -76,10 +76,17 @@ class ScrcpySession(
             val client = link.client
             ensureServerJar(client)
 
-            val server = register(client.openService("shell:${ScrcpyProtocol.serverCommand(scid)}"))
-            scope.launch { drainServer(server) }
-
-            val video = openSocket(client, readDummyByte = true)
+            val video = try {
+                launchServerAndOpenVideo(client)
+            } catch (e: IOException) {
+                // The previous session's server deletes the jar when it exits (cleanup=true), which can
+                // land after our check above. If that is why this one died, push again and retry once.
+                if (closed || !serverEnded || jarIsCurrent(client)) throw e
+                synchronized(output) { output.setLength(0) }
+                serverEnded = false
+                ensureServerJar(client)
+                launchServerAndOpenVideo(client)
+            }
             val reader = ByteStreamReader(video)
             videoReader = reader
             val control = openSocket(client, readDummyByte = false)
@@ -142,11 +149,19 @@ class ScrcpySession(
         throw IOException("Session closed")
     }
 
-    private suspend fun ensureServerJar(client: AdbClient) {
-        val jar = loadServerJar()
+    private suspend fun launchServerAndOpenVideo(client: AdbClient): AdbStream {
+        val server = register(client.openService("shell:${ScrcpyProtocol.serverCommand(scid)}"))
+        scope.launch { drainServer(server) }
+        return openSocket(client, readDummyByte = true)
+    }
+
+    private suspend fun jarIsCurrent(client: AdbClient): Boolean {
         val existing = (client.shell("stat -c %s ${ScrcpyProtocol.SERVER_PATH}") as? AdbResult.Success)?.output?.trim()
-        if (existing == jar.size.toString()) return
-        client.push(ScrcpyProtocol.SERVER_PATH, jar)
+        return existing == loadServerJar().size.toString()
+    }
+
+    private suspend fun ensureServerJar(client: AdbClient) {
+        if (!jarIsCurrent(client)) client.push(ScrcpyProtocol.SERVER_PATH, loadServerJar())
     }
 
     /**

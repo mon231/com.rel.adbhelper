@@ -62,12 +62,6 @@ the target emulator was overloaded (load average 17 to 35) for most later attemp
 not confirmed fixed. If it recurs, logcat tag `AdbConnection` now says which streams were open,
 whether a write was blocked and when the reader last heard from the device.
 
-**1e. Quick re-open of Mirror may fail to start.** The scrcpy server runs with `cleanup=true` and
-deletes `/data/local/tmp/scrcpy-server.jar` when it exits; a server still shutting down can
-delete the jar the next session just pushed (`ensureServerJar` pushes only when the size
-differs). Not observed in the app; found by reading. Fix in `core/scrcpy/ScrcpySession.kt`
-(wait for the old server to exit, or push under a per-session name).
-
 **1f. Emulator-to-emulator connections are dropped after large transfers.** Both transports show
 it (`adbd: connection terminated: read failed`, then `Software caused connection abort` on the
 app side) with no stream open; the app reconnects by itself. Believed to be the emulators'
