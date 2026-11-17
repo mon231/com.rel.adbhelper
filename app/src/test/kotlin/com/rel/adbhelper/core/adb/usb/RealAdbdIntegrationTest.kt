@@ -353,7 +353,7 @@ class RealAdbdIntegrationTest {
         }
     }
 
-    private companion object {
+    internal companion object {
         const val ENV = "ADBHELPER_REAL_ADBD"
 
         /** An RSA-2048 key kept under the user's home (never in the repo), made on first use. */
