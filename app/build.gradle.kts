@@ -79,6 +79,8 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    // The transitive 3.5.0 crashes on Android 17 (InputManager.getInstance is gone).
+    androidTestImplementation(libs.androidx.test.espresso.core)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     testImplementation(libs.junit.jupiter)
