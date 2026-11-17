@@ -21,7 +21,7 @@ record of what was done.
   - The whole app through the debug-only "Own stack (debug)" button: connect with the app's real
     key, Info, Apps, Files (28 MB upload and download, checksums match), Shell, Processes, Logs,
     Power, Monitor, Mirror with touch.
-- Added an instrumented UI test suite (`app/src/androidTest`) and an `emulator-tests` CI job: both compile but have never run (no device was used); see `docs/contributing.md`.
+- Added an instrumented UI test suite (`app/src/androidTest`) and an `emulator-tests` CI job; see `docs/contributing.md`. On the Android 17 emulator (2026-11-17) 4 of 5 tests passed (connect screen, left-to-right under RTL, USB dialog, unreachable address) and the hub walk was skipped; with `adbTarget=127.0.0.1:5555` it timed out opening the first shell because no Allow dialog appeared, so the hub walk has never run.
 - **Not run on real hardware.** The only untested USB code is the thin adapter over
   `UsbDeviceConnection.bulkTransfer` and the Android USB permission flow.
 
@@ -42,15 +42,9 @@ record of what was done.
 
 Code changes go to Sonnet agents, one worktree each, merged into `dev` by cherry-pick.
 
-Wave 1 (parallel, no shared files):
-- **A. CI watch.** First run of the `emulator-tests` job (pushed at `85ba2d0`). Read its log, send
-  each failure (adb root, key pre-authorisation, fixed `sleep 5`, Compose test behaviour) to a
-  Sonnet agent. Touches only `.github/` and test code.
-- **B. UI tests on `Pixel_10_Pro`** (owner agreed; the run uninstalls the app there, so the
-  target must authorise once more). Run `connectedDebugAndroidTest`; fix failing tests or the
-  app bug they show. Touches `androidTest` and whatever the bug is in.
+Wave 1 (A: CI watch, B: UI tests on the emulator, C: Disconnect and banner) is done.
 
-Wave 2 (after C is merged, because it changes the session API):
+Wave 2:
 - **D. Reconnect keeps the tab.** Reconnect from the banner returns to the same tab.
 - **E. Re-test 1b/1d.** With the banner in place, repeat Logs/Mirror to Power rounds on the
   emulators and read `AdbClient` / `AdbConnection` logcat if a drop recurs.
