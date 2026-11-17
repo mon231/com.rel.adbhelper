@@ -336,8 +336,11 @@ class UsbAdbTransportTest {
         peer.expect(AdbWire.OKAY)
 
         val refused = async(Dispatchers.Default) { client.shell("nope") }
-        peer.expect(AdbWire.CLSE)
-        val open2 = peer.expect(AdbWire.OPEN)
+        // The first stream's CLSE leaves on the close-sender thread, the new OPEN on the caller's:
+        // either may reach the wire first on a loaded machine.
+        val sent = listOf(peer.expect(), peer.expect())
+        assertEquals(setOf(AdbWire.CLSE, AdbWire.OPEN), sent.map { it.command }.toSet())
+        val open2 = sent.first { it.command == AdbWire.OPEN }
         peer.send(AdbMessage.close(0, open2.arg0))
         assertTrue(refused.await() is AdbResult.TransportUnreachable)
     }
