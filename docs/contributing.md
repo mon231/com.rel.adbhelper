@@ -35,6 +35,36 @@ ADB over plain TCP is the same wire protocol as ADB over USB, so the app's own U
   It uses a persistent test key in `~/.adbhelper-test/adbkey.pk8` (never in the repo), so the
   device asks for authorisation once: accept the dialog within 60 s on the first run.
 
+### Instrumented UI tests
+
+`app/src/androidTest` holds a small Compose UI suite (`AppUiTest`): Connect screen entry points,
+layout stays left-to-right under an RTL window, USB dialog with no device, and an unreachable
+address ending in an error. With an emulator or device attached:
+
+```bash
+bash ./gradlew connectedDebugAndroidTest
+# plus the end-to-end hub walk (every tab, `echo hi` in Shell) against a target's adbd:
+bash ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.adbTarget=127.0.0.1:5555
+```
+
+!!! warning
+    `connectedAndroidTest` **uninstalls the app from the device afterwards**, which deletes the
+    app's ADB key there, so the device will ask to authorise again. Do not run it on a device you
+    care about; use a throwaway emulator.
+
+The `adbTarget` test is skipped without that argument. It uses the app's own key, so the target
+must trust it: tap Allow on the first connection (the test waits up to 2 minutes), or use a
+target that does not require authorisation. Nothing automates this yet.
+
+### CI emulator job
+
+The `emulator-tests` job in `.github/workflows/build.yml` boots an API 34 `google_apis` x86_64
+emulator (`android-emulator-runner`) and runs `.github/scripts/emulator-tests.sh`: it writes the
+integration-test key as an `adb_keys` line (`ExportTestAdbKeyTest`), uses `adb root` to append it
+to `/data/misc/adb/adb_keys` (no Allow dialog), opens adbd on TCP with `adb tcpip`, forwards it
+to `127.0.0.1:5557`, then runs `RealAdbdIntegrationTest` and `connectedDebugAndroidTest`. The
+`adbTarget` test stays skipped there. The job is `continue-on-error` because it has never run.
+
 ## Building docs locally
 
 This site is built with [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/):

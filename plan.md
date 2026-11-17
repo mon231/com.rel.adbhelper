@@ -21,6 +21,7 @@ record of what was done.
   - The whole app through the debug-only "Own stack (debug)" button: connect with the app's real
     key, Info, Apps, Files (28 MB upload and download, checksums match), Shell, Processes, Logs,
     Power, Monitor, Mirror with touch.
+- Added an instrumented UI test suite (`app/src/androidTest`) and an `emulator-tests` CI job: both compile but have never run (no device was used); see `docs/contributing.md`.
 - **Not run on real hardware.** The only untested USB code is the thin adapter over
   `UsbDeviceConnection.bulkTransfer` and the Android USB permission flow.
 
@@ -122,6 +123,8 @@ Mirror (works on the emulator: video, touch, Back, Home, server stops on leaving
 
 - [ ] Section 2 done for whatever the release notes claim; unverified features labelled as such.
 - [ ] CI green on `dev`.
+- [ ] The `emulator-tests` job (`continue-on-error`, never run) has been checked after the first
+  push: fix it until green, then remove `continue-on-error`.
 
 Signing stays on `signapp` from PyPI with its built-in keystore (owner's decision), so builds
 keep installing over `v0.1.0`.
