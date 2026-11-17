@@ -1,7 +1,7 @@
 # ADB Helper
 
 ADB Helper turns an Android phone into an ADB control console for a second Android device,
-reached over Wi-Fi (USB-OTG is on the roadmap — see [Known limitations](known-limitations.md)).
+reached over Wi-Fi or a USB-OTG cable.
 
 It's a clean-room Kotlin rewrite of `didjdk/adbhelper`: same feature set, rebuilt from scratch
 as a small, modular, maintainable codebase, with no monetization and no code or resources
@@ -19,6 +19,9 @@ carried over from the original project.
 - **Power** — reboot (normal/recovery/bootloader), change display DPI, toggle wireless
   debugging on the target.
 - **Process manager** — list and kill running processes.
+- **Logs** — live logcat with level and text filters.
+- **Mirror** — live video of the target's screen with touch, Back, Home and Recents (scrcpy).
+- **USB-OTG** — connect over a cable with the app's own ADB-over-USB stack (not yet verified on real hardware).
 
-See [Features](features.md) for the full screen-by-screen walkthrough, or
+See [Features](features/index.md) for the full screen-by-screen walkthrough, or
 [Getting started](getting-started.md) to build and run the app.

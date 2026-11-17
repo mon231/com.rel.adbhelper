@@ -36,6 +36,24 @@ actively maintained open-source ADB client library, behind a small `AdbTransport
 `core/session/DeviceSession` is a small singleton that carries the connected `AdbClient` from
 the Connect screen into the device hub (`DeviceScreen`), which hosts one tab per feature.
 
+### Health and the connection-lost banner
+
+`core/session/ConnectionHealth` holds a `StateFlow<Throwable?>`. It sends no traffic: `AdbClient`
+reports every command and stream outcome to it, a failure sets the cause, and any later success
+clears it. The hub shows a banner while the cause is set; **Reconnect** runs `echo ok` through the
+client (which re-establishes the transport) and **Disconnect** detaches the session. Watchdogs
+bound blocking I/O: 15 s per command, 2 s per chunk of a raw stream, and a timeout invalidates the
+transport so the next command reconnects.
+
+### USB host flow
+
+`connect/UsbConnect` lists `UsbManager` devices with an ADB interface, requests Android's USB
+permission through a broadcast (`com.rel.adbhelper.USB_PERMISSION`), opens the device, claims the
+interface and hands `UsbPacketChannel` (bulk in/out) to `UsbAdbTransport`. The session's
+`onDetach` closes the connection and releases the interface. In debug builds `TcpPacketChannel`
+swaps the USB channel for a socket, which is how the stack is tested against an emulator's `adbd`.
+The adapter over `bulkTransfer` and the permission flow are the only parts not run on hardware.
+
 ## Pure logic layer
 
 Everything that can be tested without a live device lives in `core/*` as plain functions:
@@ -44,10 +62,8 @@ protocol framing, command builders, and text parsers for `getprop`, `ps`, `ls -l
 
 ## Fastboot
 
-There's no comparable well-known Android-hosted client library for fastboot, so reboot-to-
-bootloader flows are expected to shell out to a genuine prebuilt `fastboot` binary via
-`ProcessBuilder` once that part of the design lands, rather than a hand-rolled USB fastboot
-client.
+Not implemented. The Power tab can only reboot the target into the bootloader
+(`reboot bootloader`); it cannot talk to it afterwards.
 
 ## Mirroring
 

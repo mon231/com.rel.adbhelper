@@ -76,6 +76,4 @@ mkdocs serve
 
 ## Picking up a known gap
 
-[Known limitations](known-limitations.md) lists the two biggest gaps (USB-OTG transport, screen
-mirroring) along with what each would actually require. Either is a substantial, standalone
-piece of work — expect to open its own design discussion before writing code.
+[Known limitations](known-limitations.md) lists open bugs and everything still unverified on real hardware. Hardware verification of USB-OTG and Mirror is the most useful contribution. See also [Testing](testing.md).
