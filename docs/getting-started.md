@@ -23,9 +23,7 @@ directly from Android Studio.
 ```
 
 Unit tests cover the pure logic layer (`core/*`): protocol framing, command builders, and the
-text parsers for `getprop`, `ps`, `ls -la`, and `pm`/`dumpsys package` output. There's no
-live-device integration suite — connecting to and controlling a second physical device isn't
-something CI can exercise, so that part is smoke-tested by hand against a real target.
+text parsers for `getprop`, `ps`, `ls -la`, and `pm`/`dumpsys package` output. See [Testing](testing.md) for the integration and emulator tests.
 
 ## Connecting to a target
 
@@ -33,7 +31,7 @@ something CI can exercise, so that part is smoke-tested by hand against a real t
    own wireless-debugging screen), or tap **Scan** to sweep the local subnet, or **Pair** to use
    a wireless-debugging pairing code.
 2. On first connect, accept the "Allow debugging" prompt that appears on the target's screen.
-3. Once connected, the app lands on the device hub — a row of tabs (Info, Apps, Files, Shell,
-   Power, Monitor) for everything else.
+3. Once connected, the app lands on the device hub — a row of tabs (Info, Apps, Files, Shell, Processes, Logs,
+   Power, Monitor, Mirror) for everything else.
 
-See [Features](features.md) for what each tab does.
+See [Features](features/index.md) for what each tab does.

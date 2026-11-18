@@ -2,14 +2,20 @@ package com.rel.adbhelper.features.deviceinfo
 
 import android.content.Context
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.describe
+import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.device.DeviceInfo
 import com.rel.adbhelper.core.device.buildDeviceInfo
 import com.rel.adbhelper.core.device.parseGetprop
+import com.rel.adbhelper.core.image.PNG_IEND
+import com.rel.adbhelper.core.image.isCompletePng
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class DeviceInfoViewModel(
@@ -29,34 +35,37 @@ class DeviceInfoViewModel(
         scope.launch {
             _state.value = State(loading = true)
             _state.value = try {
-                val props = parseGetprop(client.shell("getprop").takeSuccess().orEmpty())
-                val battery = client.shell("dumpsys battery").takeSuccess().orEmpty()
-                val df = client.shell("df -k /data").takeSuccess().orEmpty()
-                val wm = client.shell("wm size; wm density").takeSuccess().orEmpty()
-                val ip = client.shell("ip addr show wlan0").takeSuccess().orEmpty()
-                val cores = client.shell("nproc").takeSuccess().orEmpty().trim().toIntOrNull() ?: 0
+                val props = parseGetprop(client.shell("getprop").outputOrEmpty())
+                val battery = client.shell("dumpsys battery").outputOrEmpty()
+                val df = client.shell("df -k /data").outputOrEmpty()
+                val wm = client.shell("wm size; wm density").outputOrEmpty()
+                val ip = client.shell("ip addr show wlan0").outputOrEmpty()
+                val cores = client.shell("nproc").outputOrEmpty().trim().toIntOrNull() ?: 0
                 State(loading = false, info = buildDeviceInfo(props, battery, df, wm, ip, cores))
             } catch (t: Throwable) {
-                State(loading = false, message = "Connection to the device was lost")
+                State(loading = false, message = t.describe())
             }
         }
     }
 
     fun screenshot(context: Context) {
         scope.launch {
-            _state.value = _state.value.copy(message = "Capturing screenshot…")
+            _state.update { it.copy(message = "Capturing screenshot…") }
             try {
-                val bytes = client.raw("exec:screencap -p")
+                val bytes = client.raw("exec:screencap -p", endMarker = PNG_IEND)
+                if (!isCompletePng(bytes)) throw java.io.IOException("incomplete screenshot")
                 val dir = context.getExternalFilesDir("Screenshots") ?: context.filesDir
                 val file = java.io.File(dir, "adbhelper-${System.currentTimeMillis()}.png")
                 file.writeBytes(bytes)
-                _state.value = _state.value.copy(message = "Screenshot saved to ${file.absolutePath}")
+                _state.update { it.copy(message = "Screenshot saved to ${file.absolutePath}") }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Failed to capture screenshot")
+                _state.update { it.copy(message = "Failed to capture screenshot: ${t.describe()}") }
             }
         }
     }
 
-    private fun com.rel.adbhelper.core.adb.AdbResult.takeSuccess(): String? =
-        (this as? com.rel.adbhelper.core.adb.AdbResult.Success)?.output
+    /** One command the target rejects (no wlan0, no `nproc`) only blanks its own row; a dead
+     * link throws, so [load] reports it instead of showing an all-empty panel. */
+    private fun AdbResult.outputOrEmpty(): String =
+        if (this is AdbResult.CommandFailed) "" else outputOrThrow()
 }

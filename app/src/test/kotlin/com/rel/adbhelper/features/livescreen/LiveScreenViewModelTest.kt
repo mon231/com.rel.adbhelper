@@ -16,12 +16,18 @@ import org.junit.jupiter.api.Test
 private fun client(transport: com.rel.adbhelper.core.adb.AdbTransport) =
     AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined)
 
+/** Smallest thing that passes for a whole PNG: signature, then the IEND chunk. */
+private val PNG = byteArrayOf(
+    0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE.toByte(), 0x42, 0x60, 0x82.toByte(),
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class LiveScreenViewModelTest {
 
     @Test
     fun `start repeatedly captures frames, one capture at a time, until stop is called`() = runTest {
-        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to byteArrayOf(1, 2, 3)))
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to PNG))
         val vm = LiveScreenViewModel(client(transport), scope = this)
 
         vm.start()
@@ -33,6 +39,21 @@ class LiveScreenViewModelTest {
         val framesAtStop = vm.state.value.frameCount
         advanceTimeBy(100)
         assertEquals(framesAtStop, vm.state.value.frameCount, "expected no further captures once stopped")
+    }
+
+    @Test
+    fun `an incomplete frame is skipped without an error`() = runTest {
+        val truncated = PNG.copyOf(PNG.size - 1)
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:screencap -p" to truncated))
+        val vm = LiveScreenViewModel(client(transport), scope = this)
+
+        vm.start()
+        advanceTimeBy(100)
+        vm.stop()
+
+        assertEquals(0, vm.state.value.frameCount)
+        assertEquals(null, vm.state.value.frame)
+        assertEquals("", vm.state.value.error)
     }
 
     @Test

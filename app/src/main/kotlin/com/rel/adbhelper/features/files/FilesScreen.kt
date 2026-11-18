@@ -33,6 +33,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.rel.adbhelper.core.files.FileEntry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun FilesScreen(modifier: Modifier = Modifier) {
@@ -48,14 +52,20 @@ fun FilesScreen(modifier: Modifier = Modifier) {
     val state by viewModel.state.collectAsState()
     var dialog by remember { mutableStateOf<FilesDialog?>(null) }
 
+    val uploadScope = rememberCoroutineScope()
+
     LaunchedEffect(Unit) { viewModel.open(state.path) }
 
     val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: android.net.Uri? ->
         if (uri != null) {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            if (bytes != null) {
-                val name = queryDisplayName(context, uri) ?: "upload.bin"
-                viewModel.upload("${state.path.trimEnd('/')}/$name", bytes)
+            val dir = state.path.trimEnd('/')
+            // Off the main thread: the name query can hit a remote provider. The file itself is
+            // streamed by the view model, never read into memory here.
+            uploadScope.launch {
+                val name = withContext(Dispatchers.IO) { queryDisplayName(context, uri) }
+                viewModel.upload("$dir/${name ?: "upload.bin"}") {
+                    runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
+                }
             }
         }
     }

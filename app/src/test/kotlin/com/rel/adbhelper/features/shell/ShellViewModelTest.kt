@@ -3,11 +3,13 @@ package com.rel.adbhelper.features.shell
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbStream
 import com.rel.adbhelper.core.adb.AdbTransport
+import com.rel.adbhelper.core.adb.FakeAdbTransport
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.withContext
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -15,10 +17,11 @@ import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 
-private class RecordingStream : AdbStream {
-    var closedOnThread: Thread? = null
-    override suspend fun write(data: ByteArray) {}
-    override suspend fun readAll(): ByteArray = ByteArray(0)
+private class RecordingStream(private val writeFailure: Throwable? = null) : AdbStream {
+    @Volatile var closedOnThread: Thread? = null
+    override suspend fun write(data: ByteArray) {
+        writeFailure?.let { throw it }
+    }
 
     // Never resolves on its own — a real terminal session's reader loop sits here until the
     // stream is closed out from under it. If this returned immediately instead, the shell
@@ -46,7 +49,6 @@ private class RecordingTransport(val stream: RecordingStream) : AdbTransport {
 private class ThrowsOnForceCloseStream : AdbStream {
     private val latch = CountDownLatch(1)
     override suspend fun write(data: ByteArray) {}
-    override suspend fun readAll(): ByteArray = ByteArray(0)
     override suspend fun readChunk(): ByteArray? {
         withContext(Dispatchers.IO) { latch.await() }
         throw IOException("Stream closed.")
@@ -60,7 +62,133 @@ private class SingleStreamTransport(private val stream: AdbStream) : AdbTranspor
     override suspend fun open(service: String): AdbStream = stream
 }
 
+/** Ends its read normally, but only [lateByMs] after it is closed — so the old reader finishes
+ * after restart() has already started the next session. */
+private class EndsLateOnCloseStream(private val lateByMs: Long) : AdbStream {
+    private val latch = CountDownLatch(1)
+    override suspend fun write(data: ByteArray) {}
+    override suspend fun readChunk(): ByteArray? {
+        withContext(Dispatchers.IO) {
+            latch.await()
+            Thread.sleep(lateByMs)
+        }
+        return null
+    }
+    override fun close() {
+        latch.countDown()
+    }
+}
+
+private class SequenceTransport(private val streams: List<AdbStream>) : AdbTransport {
+    private var next = 0
+    override suspend fun open(service: String): AdbStream = streams[next++]
+}
+
 class ShellViewModelTest {
+
+    @Test
+    fun `a late-finishing old reader does not orphan the restarted session`() {
+        val second = RecordingStream()
+        val vm = ShellViewModel(
+            AdbClient(SequenceTransport(listOf(EndsLateOnCloseStream(300), second)), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            closeDispatcher = Dispatchers.IO,
+        )
+        vm.start()
+        assertTrue(vm.state.value.connected)
+
+        vm.restart()
+        Thread.sleep(700)
+
+        assertTrue(vm.state.value.connected, "new session was marked ended: ${vm.state.value}")
+        assertEquals("", vm.state.value.message)
+        // The new stream is still the current one: closing the view model closes it.
+        vm.close()
+        val deadline = System.currentTimeMillis() + 2_000
+        while (second.closedOnThread == null && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertTrue(second.closedOnThread != null, "expected the new stream to still be tracked")
+    }
+
+    @Test
+    fun `restartAdbServer reports success when the restart drops the link`() {
+        val vm = ShellViewModel(
+            AdbClient(FakeAdbTransport(throwOnRead = IOException("Stream closed.")), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.restartAdbServer()
+
+        assertEquals("adb server restart requested", vm.state.value.message)
+    }
+
+    @Test
+    fun `restartAdbServer reports a command the target rejected`() {
+        val vm = ShellViewModel(
+            AdbClient(
+                FakeAdbTransport(scriptedOutput = "Failed to set property\n", exitCode = 1),
+                watchdogDispatcher = Dispatchers.Unconfined,
+            ),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.restartAdbServer()
+
+        assertTrue(vm.state.value.message.startsWith("Failed to restart adb server"), "got ${vm.state.value.message}")
+    }
+
+    @Test
+    fun `output keeps only the newest entries`() {
+        // Five more lines than the cap, one byte per chunk, then the stream ends.
+        val transport = FakeAdbTransport(
+            scriptedOutput = "a\n".repeat(MAX_OUTPUT_ENTRIES) + "b\n".repeat(5),
+            omitExitMarker = true,
+            chunkSize = 1,
+        )
+        val vm = ShellViewModel(
+            AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.start()
+
+        val output = vm.state.value.output
+        assertEquals(MAX_OUTPUT_ENTRIES, output.size)
+        assertEquals(listOf("b", "b", "b", "b", "b"), output.takeLast(5))
+    }
+
+    @Test
+    fun `a line split across chunks is one row and a trailing partial line is flushed at the end`() {
+        val transport = FakeAdbTransport(
+            scriptedOutput = "hello world\r\nsecond\nthird",
+            omitExitMarker = true,
+            chunkSize = 4,
+        )
+        val vm = ShellViewModel(
+            AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.start()
+
+        assertEquals(listOf("hello world", "second", "third"), vm.state.value.output)
+    }
+
+    @Test
+    fun `carriage returns are stripped from rows and from the partial line`() {
+        val transport = FakeAdbTransport(
+            scriptedOutput = "a\r\r\nb\r\nprompt\r",
+            omitExitMarker = true,
+            chunkSize = 100,
+        )
+        val vm = ShellViewModel(
+            AdbClient(transport, watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+        )
+
+        vm.start()
+
+        assertEquals(listOf("a", "b", "prompt"), vm.state.value.output)
+    }
 
     @Test
     fun `restart closes the stream off the calling thread, not inline`() {
@@ -134,5 +262,46 @@ class ShellViewModelTest {
         }
 
         assertNull(uncaught, "expected no uncaught exception from the old reader's forced close, got $uncaught")
+    }
+
+    @Test
+    fun `close closes the stream off the calling thread`() {
+        // Leaving the Shell tab used to leak the session: nothing ever closed the stream.
+        val stream = RecordingStream()
+        val callingThread = Thread.currentThread()
+        val vm = ShellViewModel(
+            AdbClient(RecordingTransport(stream), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            closeDispatcher = Dispatchers.IO,
+        )
+        vm.start()
+        assertTrue(vm.state.value.connected, "expected the shell session to connect, got ${vm.state.value}")
+
+        vm.close()
+        val closeDeadline = System.currentTimeMillis() + 2_000
+        while (stream.closedOnThread == null && System.currentTimeMillis() < closeDeadline) {
+            Thread.sleep(10)
+        }
+
+        assertTrue(stream.closedOnThread != null, "expected close() to have been called")
+        assertFalse(stream.closedOnThread === callingThread, "expected close() to run off the calling thread")
+    }
+
+    @Test
+    fun `send on a dead stream marks the session ended instead of crashing`() {
+        var uncaught: Throwable? = null
+        val scope = CoroutineScope(Dispatchers.Unconfined + CoroutineExceptionHandler { _, e -> uncaught = e })
+        val vm = ShellViewModel(
+            AdbClient(RecordingTransport(RecordingStream(writeFailure = IOException("Stream closed."))), watchdogDispatcher = Dispatchers.Unconfined),
+            scope = scope,
+        )
+        vm.start()
+        assertTrue(vm.state.value.connected, "expected the shell session to connect, got ${vm.state.value}")
+
+        vm.send("ls")
+
+        assertNull(uncaught, "expected the failed write to be handled, got $uncaught")
+        assertFalse(vm.state.value.connected)
+        assertTrue(vm.state.value.message.isNotEmpty(), "expected a message explaining the session ended")
     }
 }

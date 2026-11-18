@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.rel.adbhelper.core.adb.AdbClient
@@ -34,6 +35,12 @@ import com.rel.adbhelper.core.adb.AdbKeyConnectionManager
 import com.rel.adbhelper.core.adb.AdbResult
 import com.rel.adbhelper.core.adb.NetworkAdbTransport
 import com.rel.adbhelper.core.net.LanScanner
+import com.rel.adbhelper.core.net.MdnsServiceTypes
+import com.rel.adbhelper.core.net.NsdMdnsDiscovery
+import com.rel.adbhelper.core.net.mergeScanResults
+import com.rel.adbhelper.core.net.pairingPrefill
+import androidx.compose.runtime.DisposableEffect
+import kotlinx.coroutines.delay
 import com.rel.adbhelper.core.recents.RecentConnections
 import com.rel.adbhelper.core.session.DeviceSession
 import com.rel.adbhelper.ui.components.SignalMark
@@ -52,6 +59,9 @@ private const val SCAN_VERIFY_TIMEOUT_MILLIS = 3_000L
  * this is purely a "don't open 20 sockets at the exact same instant" cap, not a correctness
  * requirement the way serializing the app's single real connection is. */
 private const val SCAN_VERIFY_CONCURRENCY = 5
+
+/** Minimum time mDNS discovery keeps listening during a scan. */
+private const val MDNS_WINDOW_MILLIS = 5_000L
 
 @Composable
 fun ConnectScreen(
@@ -74,6 +84,7 @@ fun ConnectScreen(
     var scanResults by remember { mutableStateOf<List<String>?>(null) }
     var pairDialog by remember { mutableStateOf(false) }
     var usbDialog by remember { mutableStateOf(false) }
+    var ownStackAddress by remember { mutableStateOf<Pair<String, Int>?>(null) }
 
     // The device hub owns the connected target from here on; detach on leaving it is
     // handled inside DeviceScreen's lifecycle (DisposableEffect) rather than here.
@@ -132,7 +143,7 @@ fun ConnectScreen(
             text = statusText(state),
             color = statusColor,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 12.dp),
+            modifier = Modifier.padding(top = 12.dp).testTag("connectStatus"),
         )
 
         Row(
@@ -140,23 +151,43 @@ fun ConnectScreen(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(onClick = {
+            TextButton(enabled = !scanning, onClick = {
                 scope.launch {
                     scanning = true
                     scanResults = emptyList()
-                    val subnet = localSubnet(context.applicationContext)
-                    val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet.first, subnet.second)
-                    verifyScanCandidates(
-                        candidates = candidates,
-                        concurrency = SCAN_VERIFY_CONCURRENCY,
-                        verify = { host, port -> canReallyAdbConnect(context.applicationContext, host, port) },
-                        onFound = { target -> scanResults = (scanResults.orEmpty() + target).sorted() },
-                    )
-                    scanning = false
+                    // mDNS finds wireless-debugging targets on their random ports, which the
+                    // port-5555 sweep cannot. Callbacks arrive off the main thread, so hop to
+                    // this (main) scope before touching Compose state.
+                    val started = System.currentTimeMillis()
+                    val own = runCatching { localIpv4Addresses() }.getOrDefault(emptySet())
+                    val mdns = listOf(MdnsServiceTypes.CONNECT, MdnsServiceTypes.ADB).map {
+                        type -> type to NsdMdnsDiscovery(context.applicationContext)
+                    }
+                    try {
+                        mdns.forEach { (type, discovery) ->
+                            discovery.start(type) { target ->
+                                scope.launch { scanResults = mergeScanResults(scanResults.orEmpty(), listOf(target), own) }
+                            }
+                        }
+                        val subnet = localSubnet(context.applicationContext)
+                        val candidates = if (subnet == null) emptyList() else LanScanner.scan(subnet)
+                        verifyScanCandidates(
+                            candidates = candidates,
+                            concurrency = SCAN_VERIFY_CONCURRENCY,
+                            verify = { host, port -> canReallyAdbConnect(context.applicationContext, host, port) },
+                            onFound = { target -> scanResults = mergeScanResults(scanResults.orEmpty(), listOf(target)) },
+                        )
+                        delay(MDNS_WINDOW_MILLIS - (System.currentTimeMillis() - started))
+                    } finally {
+                        // Also runs when the screen leaves composition and cancels this scope.
+                        mdns.forEach { (_, discovery) -> discovery.stop() }
+                        scanning = false
+                    }
                 }
             }) { Text("Scan") }
             TextButton(onClick = { pairDialog = true }) { Text("Pair") }
             TextButton(onClick = { usbDialog = true }) { Text("USB-OTG") }
+            OwnStackButton(parseHostPort(hostPortText)) { ownStackAddress = it }
         }
 
         val scan = scanResults
@@ -219,31 +250,26 @@ fun ConnectScreen(
         PairDialog(onDismiss = { pairDialog = false })
     }
     if (usbDialog) {
-        UsbNotImplementedDialog(onDismiss = { usbDialog = false })
+        UsbConnectDialog(
+            onConnected = {
+                usbDialog = false
+                onConnected()
+            },
+            onDismiss = { usbDialog = false },
+        )
     }
-}
-
-/**
- * USB-OTG has no ADB transport behind it yet: `libadb-android` 3.1.1 (the only version
- * published) only implements the network/TLS transport, and a USB ADB client means hand-rolling
- * the AUTH/CNXN/OPEN/WRTE/CLSE wire protocol over raw `UsbManager`/`UsbDeviceConnection` bulk
- * transfer — out of scope for this pass (user decision: stub this visibly rather than build it
- * or hide it). This dialog is that stub, so the USB-OTG entry point is honest about its state
- * instead of silently missing from the UI.
- */
-@Composable
-private fun UsbNotImplementedDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("USB-OTG") },
-        text = {
-            Text(
-                "USB-OTG connections aren't implemented yet. Connect over Wi-Fi/network instead, " +
-                    "using the address field, Scan, or Pair above.",
-            )
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
-    )
+    // Debug builds only (empty in release): the app's own USB protocol stack over TCP, to
+    // exercise every tab on an emulator. Not added to recents.
+    ownStackAddress?.let { address ->
+        OwnStackDialog(
+            address = address,
+            onConnected = {
+                ownStackAddress = null
+                onConnected()
+            },
+            onDismiss = { ownStackAddress = null },
+        )
+    }
 }
 
 @Composable
@@ -254,6 +280,19 @@ private fun PairDialog(onDismiss: () -> Unit) {
     var code by rememberSaveable { mutableStateOf("") }
     var status by rememberSaveable { mutableStateOf("") }
     var pairing by remember { mutableStateOf(false) }
+    var found by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // Look for the phone's pairing service while the dialog is open; stop when it closes.
+    DisposableEffect(Unit) {
+        val discovery = NsdMdnsDiscovery(context.applicationContext)
+        discovery.start(MdnsServiceTypes.PAIRING) { target ->
+            scope.launch { // main thread; the callback arrives on a binder thread
+                found = mergeScanResults(found, listOf(target))
+                pairingPrefill(found, address)?.let { address = it }
+            }
+        }
+        onDispose { discovery.stop() }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,

@@ -25,17 +25,17 @@ class MainActivity : ComponentActivity() {
         // over the dark UI in night mode.
         enableEdgeToEdge()
         setContent {
-            // App is always left-to-right, even on RTL (e.g. Hebrew) devices.
+            // Deliberate product decision: the app is always left-to-right, never mirrored for RTL locales.
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-            AdbHelperTheme {
-                // targetSdk 36 enforces edge-to-edge by default: content draws under the
-                // system bars unless it explicitly insets itself, which previously left
-                // top-of-screen controls (e.g. Settings' first switch) unreachable because
-                // touches there were consumed by the status bar instead of the app.
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    AppNavHost(modifier = Modifier.safeDrawingPadding())
+                AdbHelperTheme {
+                    // targetSdk 36 enforces edge-to-edge by default: content draws under the
+                    // system bars unless it explicitly insets itself, which previously left
+                    // top-of-screen controls (e.g. Settings' first switch) unreachable because
+                    // touches there were consumed by the status bar instead of the app.
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        AppNavHost(modifier = Modifier.safeDrawingPadding())
+                    }
                 }
-            }
             }
         }
     }

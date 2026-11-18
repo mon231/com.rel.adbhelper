@@ -43,6 +43,17 @@ lrw-r--r-- 1 root root 21 2009-01-01 00:00 link -> /storage/self/primary
     }
 
     @Test
+    fun `dot and dot-dot are not listed`() {
+        val raw = """
+total 12
+drwxrws--- 3 u0_a212 media_rw 4096 2026-10-26 13:55 .
+drwxrws--x 5 media_rw media_rw 4096 2026-10-26 13:55 ..
+drwxrws--- 2 u0_a212 media_rw 4096 2026-10-26 13:55 .hidden
+        """.trimIndent()
+        assertEquals(listOf(".hidden"), parseLsLa(raw, "/x").map { it.name })
+    }
+
+    @Test
     fun `empty directory yields no entries`() {
         assertEquals(0, parseLsLa("total 0", "/x").size)
     }

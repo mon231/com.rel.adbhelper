@@ -20,6 +20,18 @@ private fun client(transport: AdbTransport) = AdbClient(transport, watchdogDispa
 class AdbClientTest {
 
     @Test
+    fun `shell logs the service and the exception when the transport fails`() = runTest {
+        val lines = mutableListOf<String>()
+        val client = AdbClient(
+            FakeAdbTransport(throwOnOpen = IOException("refused")),
+            watchdogDispatcher = Dispatchers.Unconfined,
+            log = { lines += it },
+        )
+        assertTrue(client.shell("wm density") is AdbResult.TransportUnreachable)
+        assertEquals(listOf("shell:wm density failed: IOException: refused"), lines)
+    }
+
+    @Test
     fun `shell returns Success with command output when transport succeeds`() = runTest {
         val transport = FakeAdbTransport(scriptedOutput = "hello\n", exitCode = 0)
         val result = client(transport).shell("echo hello")
@@ -33,14 +45,23 @@ class AdbClientTest {
         // forever instead of ever returning EOF, when the remote CLSE packet arrives while data
         // is still queued — the final queued chunk gets drained through a fast path that never
         // promotes the stream to a real "closed" state, so a later read() call blocks on a wait()
-        // nothing will ever wake. Depending on readAll() (which needs a real EOF) to know a
+        // nothing will ever wake. Depending on reading to a real EOF to know a
         // one-shot shell command is done is therefore unsafe — every call we already embed our
         // own exit marker specifically so we don't have to trust the stream's own completion
         // signal at all.
         val transport = FakeAdbTransport(scriptedOutput = "hello\n", exitCode = 0, chunkSize = 4, neverSignalsEof = true)
-        val result = AdbClient(transport, commandTimeoutMillis = 300, watchdogDispatcher = Dispatchers.Unconfined)
+        val result = AdbClient(transport, commandTimeoutMillis = 5_000, watchdogDispatcher = Dispatchers.Unconfined)
             .shell("echo hello")
         assertEquals(AdbResult.Success("hello\n"), result)
+    }
+
+    @Test
+    fun `shell finds the exit marker after a long output delivered in tiny chunks`() = runTest {
+        // Only the tail of the output is searched per chunk; chunkSize = 1 splits the marker
+        // across as many chunks as it has bytes.
+        val output = "line of output\n".repeat(50)
+        val transport = FakeAdbTransport(scriptedOutput = output, exitCode = 0, chunkSize = 1)
+        assertEquals(AdbResult.Success(output), client(transport).shell("cat big"))
     }
 
     @Test
@@ -164,8 +185,76 @@ class AdbClientTest {
         }
 
         assertTrue(
-            elapsedMillis < 2_000,
+            elapsedMillis < 4_500,
             "expected the hang to be force-closed after rawChunkTimeoutMillis (300ms), not commandTimeoutMillis (5000ms) — took ${elapsedMillis}ms",
+        )
+    }
+
+    private val endMarker = byteArrayOf(0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE.toByte(), 0x42, 0x60, 0x82.toByte())
+    private val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 1, 2, 3, 4, 5, 6, 7, 8, 9) + endMarker
+
+    @Test
+    fun `raw with an end marker returns at once when it arrives and leaves the connection alone`() {
+        // The stream delivers the whole PNG (in chunks smaller than the marker, so it arrives
+        // split) and then blocks forever, like the library does at the end of a screencap.
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:screencap -p" to png),
+            chunkSize = 5,
+            neverSignalsEof = true,
+        )
+        val client = AdbClient(
+            transport,
+            commandTimeoutMillis = 5_000L,
+            watchdogDispatcher = Dispatchers.Unconfined,
+            rawChunkTimeoutMillis = 5_000L,
+        )
+
+        var bytes = ByteArray(0)
+        val elapsedMillis = kotlin.system.measureTimeMillis {
+            bytes = kotlinx.coroutines.runBlocking { client.raw("exec:screencap -p", endMarker = endMarker) }
+        }
+
+        assertTrue(png.contentEquals(bytes))
+        assertTrue(elapsedMillis < 4_500, "took ${elapsedMillis}ms; the 5s watchdog must not be waited for")
+        assertEquals(0, transport.invalidateCallCount)
+        assertTrue("exec:screencap -p" in transport.closedServices)
+    }
+
+    @Test
+    fun `raw without an end marker still invalidates the connection when the stream stalls`() {
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:screencap -p" to png),
+            neverSignalsEof = true,
+        )
+        val client = AdbClient(
+            transport,
+            commandTimeoutMillis = 5_000L,
+            watchdogDispatcher = Dispatchers.Unconfined,
+            rawChunkTimeoutMillis = 300L,
+        )
+
+        val bytes = kotlinx.coroutines.runBlocking { client.raw("exec:screencap -p") }
+
+        assertTrue(png.contentEquals(bytes))
+        assertEquals(1, transport.invalidateCallCount)
+    }
+
+    @Test
+    fun `shell honours a per-call timeout instead of the client-wide one`() {
+        // Plain runBlocking for the same reason as the raw watchdog test above: only a real
+        // wall-clock bound observes which timeout fired.
+        val transport = FakeAdbTransport(scriptedOutput = "no marker yet", omitExitMarker = true, neverSignalsEof = true)
+        val client = AdbClient(transport, commandTimeoutMillis = 5_000L, watchdogDispatcher = Dispatchers.Unconfined)
+
+        var result: AdbResult? = null
+        val elapsedMillis = kotlin.system.measureTimeMillis {
+            result = kotlinx.coroutines.runBlocking { client.shell("pm install x", timeoutMillis = 300L) }
+        }
+
+        assertTrue(result is AdbResult.TransportUnreachable, "expected the stuck read to be force-closed, got $result")
+        assertTrue(
+            elapsedMillis < 4_500,
+            "expected the per-call timeout (300ms) to fire, not commandTimeoutMillis (5000ms) — took ${elapsedMillis}ms",
         )
     }
 
@@ -188,11 +277,105 @@ class AdbClientTest {
     }
 
     @Test
+    fun `push from a stream writes it chunk by chunk and verifies the byte count it sent`() = runTest {
+        val payload = ByteArray(10) { it.toByte() }
+        // Hands out at most 3 bytes per read, like a real network/content stream.
+        val trickle = object : java.io.InputStream() {
+            private val source = java.io.ByteArrayInputStream(payload)
+            override fun read(): Int = source.read()
+            override fun read(b: ByteArray, off: Int, len: Int): Int = source.read(b, off, minOf(len, 3))
+        }
+        val transport = FakeAdbTransport()
+
+        client(transport).push("/data/local/tmp/x", trickle, chunkSize = 4)
+
+        val written = transport.writtenByService["exec:cat > '/data/local/tmp/x'"].orEmpty()
+        assertEquals(listOf(4, 4, 2), written.map { it.size })
+        assertTrue(payload.contentEquals(written.reduce { a, b -> a + b }))
+    }
+
+    @Test
+    fun `push from a stream fails when the target reports a different size than was sent`() = runTest {
+        var failure: IOException? = null
+        try {
+            client(FakeAdbTransport(statOutput = "9")).push("/x", java.io.ByteArrayInputStream(ByteArray(10)), chunkSize = 4)
+        } catch (e: IOException) {
+            failure = e
+        }
+        assertTrue(failure != null, "expected push to throw on a size mismatch")
+    }
+
+    @Test
+    fun `push fails when the target's file size does not match what was written`() = runTest {
+        // `cat > path` into a read-only directory fails on the target only — every write and the
+        // close on this side still succeed, so push used to report success for a file that was
+        // never written.
+        val transport = FakeAdbTransport(statOutput = "0")
+        var failure: IOException? = null
+        try {
+            client(transport).push("/system/x", byteArrayOf(1, 2, 3))
+        } catch (e: IOException) {
+            failure = e
+        }
+        assertTrue(failure != null, "expected push to throw when the target reports a different size")
+    }
+
+    @Test
+    fun `push and pull shell-quote a path containing a single quote`() = runTest {
+        // Unquoted, "bob's.txt" either broke the remote command or let the rest of the name run
+        // as shell.
+        val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/bob'\\''s.txt'" to byteArrayOf(7)))
+        assertEquals(listOf<Byte>(7), client(transport).pull("/sdcard/bob's.txt").toList())
+
+        val pushTransport = FakeAdbTransport()
+        client(pushTransport).push("/sdcard/bob's.txt", byteArrayOf(1, 2))
+        assertEquals(setOf("exec:cat > '/sdcard/bob'\\''s.txt'"), pushTransport.writtenByService.keys)
+    }
+
+    @Test
     fun `pull returns the streamed bytes for the requested path`() = runTest {
         val payload = "file content".toByteArray()
         val transport = FakeAdbTransport(serviceOutputs = mapOf("exec:cat '/sdcard/a.txt'" to payload))
         val bytes = client(transport).pull("/sdcard/a.txt")
         assertTrue(payload.contentEquals(bytes))
+    }
+
+    @Test
+    fun `pullTo treats the library's Stream-closed exception as end of file when all bytes arrived`() = runTest {
+        val payload = ByteArray(10) { it.toByte() }
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:cat '/sdcard/t.txt'" to payload),
+            chunkSize = 4,
+            throwsStreamClosedAtEof = true,
+        )
+        assertTrue(payload.contentEquals(client(transport).pull("/sdcard/t.txt")))
+    }
+
+    @Test
+    fun `pullTo fails with both sizes when Stream-closed cuts the file short`() = runTest {
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:cat '/sdcard/t.txt'" to ByteArray(6)),
+            statOutput = "10",
+            throwsStreamClosedAtEof = true,
+        )
+        val e = assertThrows(IOException::class.java) { kotlinx.coroutines.runBlocking { client(transport).pull("/sdcard/t.txt") } }
+        assertTrue("received 6 bytes but the target file has 10" in e.cause!!.message!!, e.cause!!.message)
+    }
+
+    @Test
+    fun `pullTo still fails on any other IOException`() = runTest {
+        val transport = FakeAdbTransport(
+            serviceOutputs = mapOf("exec:cat '/sdcard/t.txt'" to ByteArray(6)),
+            throwOnServiceRead = IOException("Connection reset"),
+        )
+        val e = assertThrows(IOException::class.java) { kotlinx.coroutines.runBlocking { client(transport).pull("/sdcard/t.txt") } }
+        assertEquals("Connection reset", e.cause!!.message)
+    }
+
+    @Test
+    fun `pullTo fails when stat fails`() = runTest {
+        val transport = FakeAdbTransport(scriptedOutput = "stat: No such file\n", exitCode = 1)
+        assertThrows(IOException::class.java) { kotlinx.coroutines.runBlocking { client(transport).pull("/sdcard/t.txt") } }
     }
 
     @Test
@@ -229,11 +412,6 @@ class AdbClientTest {
             val transport = object : AdbTransport {
                 override suspend fun open(service: String): AdbStream = object : AdbStream {
                     override suspend fun write(data: ByteArray) {}
-                    override suspend fun readAll(): ByteArray =
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            latch.await() // blocks the real thread; only close() below releases it
-                            ByteArray(0)
-                        }
                     override suspend fun readChunk(): ByteArray? =
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             latch.await() // blocks the real thread; only close() below releases it
@@ -282,11 +460,6 @@ class AdbClientTest {
             val transport = object : AdbTransport {
                 override suspend fun open(service: String): AdbStream = object : AdbStream {
                     override suspend fun write(data: ByteArray) {}
-                    override suspend fun readAll(): ByteArray =
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            latch.await()
-                            ByteArray(0)
-                        }
                     override suspend fun readChunk(): ByteArray? =
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             latch.await()

@@ -12,12 +12,16 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import com.rel.adbhelper.core.session.DeviceSession
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun LiveScreenScreen(modifier: Modifier = Modifier) {
@@ -30,11 +34,17 @@ fun LiveScreenScreen(modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         // Decoded here, not in the ViewModel, so the ViewModel stays plain-JVM testable —
         // android.graphics.BitmapFactory has no fake/unit-test substitute in this project.
-        val bitmap = remember(state.frame) {
-            state.frame?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+        // Off the main thread: a full-screen PNG takes long enough to drop frames in composition.
+        // The previous bitmap stays on screen until the next one is ready.
+        val frame = state.frame
+        val bitmap by produceState<ImageBitmap?>(initialValue = null, frame) {
+            value = frame?.let {
+                withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+            }
         }
-        if (bitmap != null) {
-            Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Live device screen")
+        val shown = bitmap
+        if (shown != null) {
+            Image(bitmap = shown, contentDescription = "Live device screen")
         } else if (state.error.isEmpty()) {
             Text("Connecting…")
         }

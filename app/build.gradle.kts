@@ -12,6 +12,7 @@ android {
         applicationId = "com.rel.adbhelper"
         minSdk = 26
         targetSdk = 36
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Overridable from CI: ./gradlew assembleRelease -PversionName=1.2.3 -PversionCode=45
         versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = project.findProperty("versionName") as String? ?: "1.0"
@@ -73,6 +74,15 @@ dependencies {
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 
+    // Instrumented UI tests (app/src/androidTest); test-only, nothing here ships in the APK.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    // The transitive 3.5.0 crashes on Android 17 (InputManager.getInstance is gone).
+    androidTestImplementation(libs.androidx.test.espresso.core)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -86,4 +96,9 @@ kotlin {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // Opt-in integration test against a real adbd (RealAdbdIntegrationTest); skipped when unset.
+    (System.getProperty("ADBHELPER_REAL_ADBD") ?: System.getenv("ADBHELPER_REAL_ADBD"))?.let {
+        systemProperty("ADBHELPER_REAL_ADBD", it)
+        inputs.property("adbhelperRealAdbd", it)
+    }
 }

@@ -2,18 +2,26 @@ package com.rel.adbhelper.features.apps
 
 import com.rel.adbhelper.core.adb.AdbClient
 import com.rel.adbhelper.core.adb.AdbResult
+import com.rel.adbhelper.core.adb.connectionLostMessage
+import com.rel.adbhelper.core.adb.describe
+import com.rel.adbhelper.core.adb.outputOrThrow
 import com.rel.adbhelper.core.apps.AppDetails
 import com.rel.adbhelper.core.apps.AppEntry
-import com.rel.adbhelper.core.apps.classifyApps
 import com.rel.adbhelper.core.apps.parseDumpsysPackage
 import com.rel.adbhelper.core.apps.parsePmList
 import com.rel.adbhelper.core.shell.shellQuote
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.io.InputStream
 
 class AppsViewModel(
     private val client: AdbClient,
@@ -35,47 +43,51 @@ class AppsViewModel(
 
     fun load() {
         scope.launch {
-            _state.value = _state.value.copy(loading = true)
+            _state.update { it.copy(loading = true) }
             try {
                 // Sequential, not concurrent — live-reproduced: three shell() calls fired at once
                 // over this app's one shared multiplexed connection intermittently force-closed
                 // the two larger reads (system/disabled, each listing 200+ packages) while the
                 // tiny third-party read finished first, surfacing as a silent empty app list (no
-                // error shown, since the failure was swallowed by .success().orEmpty()). Same
+                // error shown, since the failure was swallowed instead of thrown — hence
+                // outputOrThrow() below, so a failed read reaches the catch). Same
                 // underlying class of bug streamOpenMutex's doc already covers for concurrent
                 // opens — here it's concurrent reads racing on one connection instead. Each read
                 // is still individually fast; the cost of going sequential is one extra round
                 // trip, not three stacked full timeouts.
-                val thirdParty = parsePmList(client.shell("pm list packages -3").success().orEmpty())
-                val system = parsePmList(client.shell("pm list packages -s").success().orEmpty())
-                val disabled = parsePmList(client.shell("pm list packages -d").success().orEmpty()).toSet()
+                val thirdParty = parsePmList(client.shell("pm list packages -3").outputOrThrow()).toSet()
+                val system = parsePmList(client.shell("pm list packages -s").outputOrThrow())
+                val disabled = parsePmList(client.shell("pm list packages -d").outputOrThrow()).toSet()
                 val apps = (thirdParty + system)
-                    .map { AppEntry(pkg = it, isSystem = it !in thirdParty.toSet(), isEnabled = it !in disabled) }
+                    .map { AppEntry(pkg = it, isSystem = it !in thirdParty, isEnabled = it !in disabled) }
                     .sortedBy { it.pkg }
-                _state.value = _state.value.copy(loading = false, apps = apps)
+                _state.update { it.copy(loading = false, apps = apps) }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(loading = false, message = "Connection to the device was lost")
+                _state.update { it.copy(
+                    loading = false,
+                    message = t.describe(),
+                ) }
             }
         }
     }
 
     fun setFilter(filter: Filter) {
-        _state.value = _state.value.copy(filter = filter)
+        _state.update { it.copy(filter = filter) }
     }
 
     fun details(entry: AppEntry) {
         scope.launch {
             try {
-                val raw = client.shell("dumpsys package ${shellQuote(entry.pkg)}").success().orEmpty()
-                _state.value = _state.value.copy(details = entry to parseDumpsysPackage(raw))
+                val raw = client.shell("dumpsys package ${shellQuote(entry.pkg)}").outputOrThrow()
+                _state.update { it.copy(details = entry to parseDumpsysPackage(raw)) }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Failed to read app details")
+                _state.update { it.copy(message = t.describe()) }
             }
         }
     }
 
     fun dismissDetails() {
-        _state.value = _state.value.copy(details = null)
+        _state.update { it.copy(details = null) }
     }
 
     fun setEnabled(entry: AppEntry, enabled: Boolean) {
@@ -91,55 +103,91 @@ class AppsViewModel(
     /** Root-gated "activate" flow: grant the app shell-level secure-settings permissions. */
     fun activate(entry: AppEntry) {
         scope.launch {
+            _state.update { it.copy(busy = "") }
             val root = client.shell("su -c id") is AdbResult.Success
             if (!root) {
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     message = "This action needs root access on this device, which isn't available.",
-                )
+                ) }
             } else {
                 val result = client.shell("su -c pm grant ${shellQuote(entry.pkg)} android.permission.WRITE_SECURE_SETTINGS")
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     message = if (result is AdbResult.Success) "Activated ${entry.pkg}" else "Activation failed",
-                )
+                ) }
             }
         }
     }
 
-    fun install(bytes: ByteArray, name: String) {
+    /** [openInput] supplies the picked APK's stream (null when it cannot be read); it is opened and
+     * read on [Dispatchers.IO] and streamed to the target, never loaded into memory whole. */
+    fun install(name: String, openInput: () -> InputStream?) {
         scope.launch {
-            _state.value = _state.value.copy(busy = "Installing $name…")
-            try {
-                val tempPath = "/data/local/tmp/adbhelper-install.apk"
-                client.push(tempPath, bytes)
-                val result = client.shell("pm install -r ${shellQuote(tempPath)}")
-                client.shell("rm ${shellQuote(tempPath)}")
-                _state.value = _state.value.copy(
-                    busy = if (result is AdbResult.Success) "Installed $name" else "Install failed",
-                )
-                load()
+            _state.update { it.copy(busy = "Installing $name…") }
+            val tempPath = "/data/local/tmp/adbhelper-install.apk"
+            var failure: Throwable? = null
+            var installed = false
+            val outcome = try {
+                val input = withContext(Dispatchers.IO) { openInput() }
+                    ?: throw IOException("Could not read the selected file")
+                input.use { client.push(tempPath, it) }
+                // pm install prints nothing until it finishes, which for a large APK is far
+                // longer than the default per-read timeout.
+                val result = client.shell("pm install -r ${shellQuote(tempPath)}", timeoutMillis = INSTALL_TIMEOUT_MILLIS)
+                // pm's own reason (INSTALL_FAILED_VERSION_DOWNGRADE, ...) is what the user needs.
+                when (result) {
+                    is AdbResult.Success -> "Installed $name".also { installed = true }
+                    is AdbResult.CommandFailed -> "Install failed: ${result.message}"
+                    is AdbResult.TransportUnreachable -> {
+                        failure = result.cause
+                        "Install failed: ${connectionLostMessage(result.cause)}"
+                    }
+                }
+            } catch (c: CancellationException) {
+                throw c
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(busy = "Install failed")
+                failure = t
+                "Install failed: ${t.describe()}"
             }
+            removeTempFile(tempPath, failure)
+            _state.update { it.copy(busy = outcome) }
+            if (installed) load()
+        }
+    }
+
+    /** Best effort, and never masks the install's own outcome. Skipped after a timeout: the link
+     * did not answer, so the `rm` would only wait out another full timeout. */
+    private suspend fun removeTempFile(path: String, failure: Throwable?) {
+        if (generateSequence(failure) { it.cause }.any { it is TimeoutCancellationException }) return
+        try {
+            client.shell("rm ${shellQuote(path)}")
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
         }
     }
 
     private fun run(command: String, successMessage: String) {
         scope.launch {
+            // The previous install's result is stale once another action starts.
+            _state.update { it.copy(busy = "") }
             try {
                 val result = client.shell(command)
-                _state.value = _state.value.copy(
+                _state.update { it.copy(
                     message = when (result) {
                         is AdbResult.Success -> successMessage
                         is AdbResult.CommandFailed -> result.message
-                        is AdbResult.TransportUnreachable -> "Connection to the device was lost"
+                        is AdbResult.TransportUnreachable -> connectionLostMessage(result.cause)
                     },
-                )
+                ) }
             } catch (t: Throwable) {
-                _state.value = _state.value.copy(message = "Connection to the device was lost")
+                _state.update { it.copy(message = connectionLostMessage(t)) }
             }
             load()
         }
     }
 
-    private fun AdbResult.success(): String? = (this as? AdbResult.Success)?.output
+
+    private companion object {
+        const val INSTALL_TIMEOUT_MILLIS = 5 * 60_000L
+    }
 }

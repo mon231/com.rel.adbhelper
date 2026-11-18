@@ -1,5 +1,7 @@
 package com.rel.adbhelper.core.adb
 
+import com.rel.adbhelper.core.session.ConnectionHealth
+import com.rel.adbhelper.core.shell.shellQuote
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -8,8 +10,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.io.ByteArrayInputStream
 import java.io.IOException
+import java.io.InputStream
 
 /**
  * Marker appended to every shell command's output so [shell] can recover the remote exit code.
@@ -19,6 +24,9 @@ import java.io.IOException
  */
 private const val EXIT_CODE_MARKER = "__ADBHELPER_EXIT__:"
 private val EXIT_CODE_LINE = Regex("$EXIT_CODE_MARKER(\\d+)\\s*\$")
+
+/** Comfortably longer than the whole marker line (marker, exit code, line ending). */
+private const val EXIT_MARKER_TAIL_BYTES = 64
 
 /** Every one-shot call below is bounded by this — without it, an unresponsive or unreachable
  * target leaves the calling screen on "Loading…"/stuck forever instead of surfacing a failure.
@@ -50,11 +58,16 @@ const val COMMAND_TIMEOUT_MILLIS = 15_000L
  */
 const val RAW_CHUNK_TIMEOUT_MILLIS = 2_000L
 
+/** How long [AdbClient.push] waits for the target's file size to catch up before calling the
+ * write failed — see its doc. */
+private const val PUSH_VERIFY_ATTEMPTS = 5
+private const val PUSH_VERIFY_RETRY_MILLIS = 200L
+
 /**
  * The library's stream reads/writes are raw blocking socket I/O with no timeout of their own —
  * there is no suspension point inside them for coroutine cancellation to land on, so a plain
- * `withTimeout` wrapped around a call to [AdbStream.readAll]/[AdbStream.readChunk]/[AdbStream.write]
- * cannot actually interrupt it: it marks the coroutine cancelled, but the blocked thread only
+ * `withTimeout` wrapped around a call to [AdbStream.readChunk]/[AdbStream.write] cannot actually
+ * interrupt it: it marks the coroutine cancelled, but the blocked thread only
  * notices once the blocking call itself returns, which on a dead link is never. Closing the
  * stream from a separate watchdog coroutine is what actually unblocks it — the underlying socket
  * throws on the blocked thread once it's closed out from under it (true on Android/Linux, which
@@ -100,6 +113,26 @@ private suspend fun <T> AdbStream.timingOutOnClose(
     }
 }
 
+/** One watchdog-bounded read; the library's confirmed benign `IOException("Stream closed.")` is
+ * returned as end of stream (null), see [AdbClient.raw]'s doc. */
+private suspend fun AdbStream.readChunkOrEof(
+    timeoutMillis: Long,
+    watchdogDispatcher: CoroutineDispatcher,
+    onTimeout: () -> Unit,
+): ByteArray? = try {
+    timingOutOnClose(timeoutMillis, watchdogDispatcher, onTimeout) { readChunk() }
+} catch (e: IOException) {
+    if (e.message == "Stream closed.") null else throw e
+}
+
+/** android.util.Log, unless this runs on the plain JVM (unit tests), where it is not available. */
+private fun androidWarn(message: String) {
+    try {
+        android.util.Log.w("AdbClient", message)
+    } catch (_: RuntimeException) {
+    }
+}
+
 class AdbClient(
     private val transport: AdbTransport,
     /** Exposed for tests only, to prove the watchdog-close behavior below without a real 15s wait. */
@@ -109,24 +142,43 @@ class AdbClient(
     /** Exposed for tests only — see [raw]'s doc on why this is its own, much shorter, value than
      * [commandTimeoutMillis]. */
     private val rawChunkTimeoutMillis: Long = RAW_CHUNK_TIMEOUT_MILLIS,
+    /** Receives one line per transport failure; tests pass their own. Never given file contents. */
+    private val log: (String) -> Unit = ::androidWarn,
 ) {
 
-    suspend fun shell(command: String): AdbResult = try {
-        runShell(command)
+    /** Fed by every command and stream below; see [ConnectionHealth]. */
+    val health = ConnectionHealth()
+
+    private fun logFailure(what: String, t: Throwable) = log("$what failed: ${t.javaClass.simpleName}: ${t.message}")
+
+    /** [timeoutMillis] bounds each wait for the command's next output, not the whole command —
+     * raise it for a command that legitimately prints nothing for a long time (`pm install` of a
+     * large APK), which the default would otherwise force-close mid-run. */
+    suspend fun shell(command: String, timeoutMillis: Long = commandTimeoutMillis): AdbResult = try {
+        runShell(command, timeoutMillis).also { health.reportSuccess() }
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
+        logFailure("shell:$command", t)
+        health.reportFailure(t)
         AdbResult.TransportUnreachable(t)
     }
 
     /** Opens a long-lived service stream (e.g. `"shell:"` for a terminal, `"localabstract:<socket>"`
      * for mirroring). The caller owns the stream's lifecycle — not time-bounded, see
      * [COMMAND_TIMEOUT_MILLIS]'s doc. */
-    suspend fun openService(service: String): AdbStream = transport.open(service)
+    suspend fun openService(service: String): AdbStream = try {
+        HealthReportingStream(transport.open(service), health).also { health.reportSuccess() }
+    } catch (c: CancellationException) {
+        throw c
+    } catch (t: Throwable) {
+        health.reportFailure(t)
+        throw t
+    }
 
     /**
      * Reads a raw service's full byte output — no shell exit-marker framing. Reads chunk-by-chunk
-     * rather than via [AdbStream.readAll] so a confirmed library bug (see [runShell]'s doc) has
+     * rather than in one read-to-EOF call so a confirmed library bug (see [runShell]'s doc) has
      * only two failure modes left to handle here, both live-reproduced capturing screenshots on
      * the Live Screen tab: when the remote CLSE packet races an already-drained read queue,
      * [AdbStream.read] throws `IOException("Stream closed.")` instead of signaling EOF the normal
@@ -135,76 +187,135 @@ class AdbClient(
      * message. Unlike [runShell], this has no embedded completion marker to fall back on (binary
      * data), so that exact, confirmed-benign exception is treated as a normal end of stream
      * instead of a failure, from either path.
+     *
+     * A caller that knows how its data ends passes [endMarker] (a PNG's IEND trailer): reading
+     * stops, and the stream is closed normally, as soon as the data received so far ends with it.
+     * That avoids waiting for the watchdog above, which would also [AdbTransport.invalidate] the
+     * shared connection and so break every other stream open on it. Only the last
+     * `endMarker.size` bytes are compared, across chunk boundaries.
      */
-    suspend fun raw(service: String): ByteArray = try {
+    suspend fun raw(service: String, endMarker: ByteArray? = null): ByteArray = try {
         val stream = openWithTimeout(service)
         try {
             val buffer = java.io.ByteArrayOutputStream()
+            var tail = ByteArray(0)
             while (true) {
-                val chunk = try {
-                    stream.timingOutOnClose(rawChunkTimeoutMillis, watchdogDispatcher, transport::invalidate) {
-                        readChunk()
-                    }
-                } catch (e: IOException) {
-                    if (e.message == "Stream closed.") null else throw e
-                } ?: break
+                val chunk = stream.readChunkOrEof(rawChunkTimeoutMillis, watchdogDispatcher, transport::invalidate) ?: break
                 buffer.write(chunk)
+                if (endMarker == null) continue
+                val recent = chunk.copyOfRange(maxOf(0, chunk.size - endMarker.size), chunk.size)
+                tail = (tail + recent).let { it.copyOfRange(maxOf(0, it.size - endMarker.size), it.size) }
+                if (tail.contentEquals(endMarker)) break
             }
-            buffer.toByteArray()
+            buffer.toByteArray().also { health.reportSuccess() }
         } finally {
             stream.close()
         }
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
+        logFailure(service, t)
+        health.reportFailure(t)
         throw IOException("failed to read from $service", t)
     }
 
     /**
-     * Streams [data] onto the target's [path] via `exec:cat >`, one [chunkSize]-sized write at
-     * a time. Each write (and the initial open) is individually timeout-bounded, not the whole
+     * Streams [input] onto the target's [path] via `exec:cat >`, one [chunkSize]-sized write at
+     * a time — only one chunk is ever held in memory, so a file far larger than the heap can be
+     * uploaded. Each write (and the initial open) is individually timeout-bounded, not the whole
      * transfer — a large file legitimately taking minutes isn't penalized the way one
      * whole-operation timeout would, while a connection that goes quiet mid-transfer still gets
      * caught within [COMMAND_TIMEOUT_MILLIS] of its last successful write.
+     *
+     * [input] is read on [Dispatchers.IO] (it is blocking I/O, e.g. a content resolver stream)
+     * and is not closed here; the caller owns it.
+     *
+     * `cat >` reports nothing back over this stream, so a write the target refused (read-only
+     * directory, no space left) looked identical to a successful one — the file's size on the
+     * target is checked afterwards against the number of bytes actually sent, and a mismatch
+     * thrown. Retried briefly because closing the stream doesn't wait for the remote `cat` to
+     * finish flushing what it already received.
      */
-    suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024): Unit = try {
-        val stream = openWithTimeout("exec:cat > '$path'")
+    suspend fun push(path: String, input: InputStream, chunkSize: Int = 256 * 1024): Unit = try {
+        val stream = openWithTimeout("exec:cat > ${shellQuote(path)}")
+        var sent = 0L
         try {
-            data.toList().chunked(chunkSize).forEach { chunk ->
-                stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
-                    write(chunk.toByteArray())
+            val buffer = ByteArray(chunkSize)
+            while (true) {
+                val filled = withContext(Dispatchers.IO) {
+                    var n = 0
+                    while (n < buffer.size) {
+                        val read = input.read(buffer, n, buffer.size - n)
+                        if (read < 0) break
+                        n += read
+                    }
+                    n
                 }
+                if (filled == 0) break
+                val chunk = buffer.copyOf(filled)
+                stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                    write(chunk)
+                }
+                sent += filled
             }
         } finally {
             stream.close()
         }
+        var attempt = 1
+        while (true) {
+            val remoteSize = shell("stat -c %s ${shellQuote(path)}").outputOrThrow().trim()
+            if (remoteSize == sent.toString()) break
+            if (attempt++ == PUSH_VERIFY_ATTEMPTS) {
+                throw IOException("wrote $sent bytes but the target has $remoteSize")
+            }
+            delay(PUSH_VERIFY_RETRY_MILLIS)
+        }
     } catch (c: CancellationException) {
         throw c
     } catch (t: Throwable) {
+        logFailure("push $path", t)
         throw IOException("failed to write to $path", t)
     }
+
+    /** In-memory convenience over the streaming [push], for payloads already in memory. */
+    suspend fun push(path: String, data: ByteArray, chunkSize: Int = 256 * 1024) =
+        push(path, ByteArrayInputStream(data), chunkSize)
 
     /**
      * Reads a file off the target via `exec:cat`, one chunk at a time into [sink] — never holds
      * the whole file in memory, and (see [push]'s doc) each chunk is individually
      * timeout-bounded rather than the whole transfer.
+     *
+     * Like [raw], the library's confirmed end-of-stream bug (`IOException("Stream closed.")`
+     * instead of a normal EOF) is treated as the end of the file — which would also make a
+     * transfer that was genuinely cut off look complete. So the file's size is read with
+     * `stat -c %s` before the first byte is requested, and the number of bytes delivered to
+     * [sink] must equal it, else an [IOException] naming both is thrown. Rule: a normal static
+     * file; one that grows or shrinks during the transfer fails the check. A `stat` that fails
+     * fails the download.
      */
     suspend fun pullTo(path: String, sink: (ByteArray) -> Unit) {
         try {
-            val stream = openWithTimeout("exec:cat '$path'")
+            val expected = shell("stat -c %s ${shellQuote(path)}").outputOrThrow().trim().toLongOrNull()
+                ?: throw IOException("could not read the size of $path")
+            val stream = openWithTimeout("exec:cat ${shellQuote(path)}")
+            var received = 0L
             try {
                 while (true) {
-                    val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
-                        readChunk()
-                    } ?: break
+                    val chunk = stream.readChunkOrEof(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) ?: break
                     sink(chunk)
+                    received += chunk.size
                 }
             } finally {
                 stream.close()
             }
+            if (received != expected) {
+                throw IOException("received $received bytes but the target file has $expected")
+            }
         } catch (c: CancellationException) {
             throw c
         } catch (t: Throwable) {
+            logFailure("pull $path", t)
             throw IOException("failed to read from $path", t)
         }
     }
@@ -230,7 +341,7 @@ class AdbClient(
 
     /**
      * Reads chunk-by-chunk, stopping as soon as the embedded exit marker is seen in the
-     * accumulated output, rather than waiting for [AdbStream.readAll]'s EOF. Live-reproduced,
+     * accumulated output, rather than waiting for the stream's own EOF. Live-reproduced,
      * decompiled-bytecode-confirmed bug in the underlying ADB protocol library
      * (`io.github.muntashirakon:libadb-android` 3.1.1): when the remote CLSE packet races the
      * last queued WRTE, [AdbStream.read] can block forever instead of ever signaling EOF — the
@@ -239,15 +350,23 @@ class AdbClient(
      * protocol-independent completion signal; trusting it instead of the stream's own (unreliable)
      * end-of-stream notification sidesteps the library bug entirely for every one-shot command.
      */
-    private suspend fun runShell(command: String): AdbResult {
+    private suspend fun runShell(command: String, timeoutMillis: Long): AdbResult {
         val stream = openWithTimeout("shell:$command; echo $EXIT_CODE_MARKER\$?")
         try {
             val buffer = java.io.ByteArrayOutputStream()
+            // The marker line only ever sits at the very end of the output, so only the last few
+            // bytes received so far are searched per chunk (kept across chunks, since the marker
+            // can arrive split in two) — decoding the whole accumulated output after every chunk
+            // was quadratic on long outputs. The full text is decoded once, when it's found.
+            var tail = ByteArray(0)
             while (true) {
-                val chunk = stream.timingOutOnClose(commandTimeoutMillis, watchdogDispatcher, transport::invalidate) {
+                val chunk = stream.timingOutOnClose(timeoutMillis, watchdogDispatcher, transport::invalidate) {
                     readChunk()
-                } ?: return AdbResult.CommandFailed("remote shell closed without an exit status")
+                } ?: return AdbResult.CommandFailed(NO_EXIT_STATUS)
                 buffer.write(chunk)
+                tail = (tail + chunk.copyOfRange(maxOf(0, chunk.size - EXIT_MARKER_TAIL_BYTES), chunk.size))
+                    .let { it.copyOfRange(maxOf(0, it.size - EXIT_MARKER_TAIL_BYTES), it.size) }
+                if (!EXIT_CODE_LINE.containsMatchIn(String(tail, Charsets.ISO_8859_1))) continue
                 val text = buffer.toString(Charsets.UTF_8.name())
                 val match = EXIT_CODE_LINE.find(text) ?: continue
                 val exitCode = match.groupValues[1].toInt()
@@ -260,4 +379,24 @@ class AdbClient(
             stream.close()
         }
     }
+}
+
+/** Reports a stream's transport error to [health]. Errors after the owner's own [close] are
+ * ignored (a read cut off by closing is not a lost link), as is the library's benign end of
+ * stream, see [AdbClient.raw]'s doc. */
+private class HealthReportingStream(private val inner: AdbStream, private val health: ConnectionHealth) : AdbStream {
+    @Volatile private var closed = false
+
+    private inline fun <T> watching(block: () -> T): T = try {
+        block()
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: IOException) {
+        if (!closed && e.message != "Stream closed.") health.reportFailure(e)
+        throw e
+    }
+
+    override suspend fun write(data: ByteArray) = watching { inner.write(data) }
+    override suspend fun readChunk(): ByteArray? = watching { inner.readChunk() }
+    override fun close() { closed = true; inner.close() }
 }

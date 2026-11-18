@@ -1,6 +1,8 @@
 package com.rel.adbhelper.features.livescreen
 
 import com.rel.adbhelper.core.adb.AdbClient
+import com.rel.adbhelper.core.image.PNG_IEND
+import com.rel.adbhelper.core.image.isCompletePng
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -42,20 +45,24 @@ class LiveScreenViewModel(
 
     fun start() {
         if (job?.isActive == true) return
-        _state.value = _state.value.copy(error = "")
+        _state.update { it.copy(error = "") }
         job = scope.launch {
             while (isActive) {
                 try {
-                    val bytes = client.raw(SCREEN_SERVICE)
-                    _state.value = _state.value.copy(
-                        frame = bytes,
-                        frameCount = _state.value.frameCount + 1,
-                        error = "",
-                    )
+                    val bytes = client.raw(SCREEN_SERVICE, endMarker = PNG_IEND)
+                    // A capture cut short by a stalled read is skipped, not shown or treated as
+                    // an error — the next one replaces it within a moment.
+                    if (isCompletePng(bytes)) {
+                        _state.update { it.copy(
+                            frame = bytes,
+                            frameCount = it.frameCount + 1,
+                            error = "",
+                        ) }
+                    }
                 } catch (c: CancellationException) {
                     throw c
                 } catch (t: Throwable) {
-                    _state.value = _state.value.copy(error = "Lost connection to device")
+                    _state.update { it.copy(error = "Lost connection to device") }
                     return@launch
                 }
                 delay(POLL_DELAY_MILLIS)

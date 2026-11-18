@@ -11,6 +11,7 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.File
 import java.math.BigInteger
+import java.security.GeneralSecurityException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
@@ -18,6 +19,11 @@ import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import java.security.interfaces.RSAPrivateCrtKey
+import java.security.spec.RSAPublicKeySpec
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -51,6 +57,14 @@ class AdbKeyConnectionManager private constructor(
     override fun getPrivateKey(): PrivateKey = privateKey
     override fun getCertificate(): Certificate = certificate
     override fun getDeviceName(): String = "ADB Helper"
+
+    /** The identity the USB transport signs with: the same key as the network transport, so a
+     * device authorises this app once for both. */
+    fun usbIdentity(): com.rel.adbhelper.core.adb.usb.AdbIdentity =
+        com.rel.adbhelper.core.adb.usb.RsaAdbIdentity(
+            privateKey,
+            certificate.publicKey as java.security.interfaces.RSAPublicKey,
+        )
 
     /** Guards against concurrent callers racing into [connect] at once — see [ConnectGate]'s doc
      * for why that's a real, previously-live bug and not just a theoretical one. Not a plain
@@ -139,20 +153,109 @@ class AdbKeyConnectionManager private constructor(
             return AdbKeyConnectionManager(privateKey, certificate)
         }
 
-        private fun loadOrGenerateKeyPair(context: Context): Pair<PrivateKey, Certificate> {
-            val keyFile = File(context.filesDir, "adb_private.key")
-            val certFile = File(context.filesDir, "adb_cert.pem")
-            if (keyFile.exists() && certFile.exists()) {
-                val privateKey = KeyFactory.getInstance("RSA")
-                    .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
-                val certificate = CertificateFactory.getInstance("X.509")
-                    .generateCertificate(certFile.inputStream())
-                return privateKey to certificate
+        /** 30 years, so the certificate effectively never expires under the app. */
+        private const val CERT_VALIDITY_DAYS = 30L * 365
+
+        private const val LOG_TAG = "AdbIdentity"
+
+        private val keyLock = Any()
+        private var cachedPair: Pair<PrivateKey, Certificate>? = null
+
+        /** Single lock around load-or-generate: concurrent scan probes must share one identity. */
+        private fun loadOrGenerateKeyPair(context: Context): Pair<PrivateKey, Certificate> =
+            synchronized(keyLock) {
+                cachedPair ?: loadOrGenerateFromDisk(context.filesDir).also { cachedPair = it }
             }
-            val (privateKey, certificate) = generateKeyPair()
-            keyFile.writeBytes(privateKey.encoded)
-            certFile.writeBytes(certificate.encoded)
-            return privateKey to certificate
+
+        /** Logs to logcat; tests pass their own. Never given key material. */
+        private fun androidLog(warn: Boolean, message: String) {
+            if (warn) android.util.Log.w(LOG_TAG, message) else android.util.Log.i(LOG_TAG, message)
+        }
+
+        /**
+         * A readable private key is never replaced: a bad certificate is re-issued from it (see
+         * [identityAction]). Only a missing or unusable key gets a new pair, and then the old
+         * files are kept as `.bak`. An unreadable key file (I/O error) propagates rather than
+         * regenerating.
+         */
+        internal fun loadOrGenerateFromDisk(
+            dir: File,
+            log: (warn: Boolean, message: String) -> Unit = ::androidLog,
+        ): Pair<PrivateKey, Certificate> {
+            val keyFile = File(dir, "adb_private.key")
+            val certFile = File(dir, "adb_cert.pem") // holds DER bytes despite the name
+            val keyExisted = keyFile.exists()
+            val privateKey: RSAPrivateCrtKey? = if (keyExisted) {
+                try {
+                    KeyFactory.getInstance("RSA")
+                        .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes())) as? RSAPrivateCrtKey
+                } catch (_: GeneralSecurityException) {
+                    null
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+            } else {
+                null
+            }
+            val certificate: X509Certificate? = if (privateKey != null && certFile.exists()) {
+                try {
+                    certFile.inputStream().use {
+                        CertificateFactory.getInstance("X.509").generateCertificate(it)
+                    } as? X509Certificate
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+            val action = identityAction(
+                keyUsable = privateKey != null,
+                certParses = certificate != null,
+                matches = privateKey != null && certificate != null && keysMatch(privateKey, certificate.publicKey),
+                needsReissue = certificate != null && certNeedsReissue(certificate.notAfter, Date()),
+            )
+            return when (action) {
+                IdentityAction.KEEP -> privateKey!! to certificate!!
+                IdentityAction.REISSUE_CERT -> {
+                    // Same private key, so devices that already trust this app still recognise it.
+                    val publicKey = KeyFactory.getInstance("RSA")
+                        .generatePublic(RSAPublicKeySpec(privateKey!!.modulus, privateKey.publicExponent))
+                    val fresh = selfSignedCertificate(publicKey, privateKey) as X509Certificate
+                    log(false, "Certificate re-issued from the existing key")
+                    try {
+                        writeAtomically(certFile, fresh.encoded)
+                    } catch (e: java.io.IOException) {
+                        log(true, "Could not save the re-issued certificate (${e.javaClass.simpleName}); using it in memory")
+                    }
+                    privateKey to fresh
+                }
+                IdentityAction.REGENERATE -> {
+                    if (keyExisted) {
+                        moveToBackup(keyFile)
+                        moveToBackup(certFile)
+                        log(true, "Private key unreadable or unusable; generated a new identity, old files kept as .bak")
+                    }
+                    val (newKey, newCert) = generateKeyPair()
+                    writeAtomically(keyFile, newKey.encoded)
+                    writeAtomically(certFile, newCert.encoded)
+                    newKey to newCert
+                }
+            }
+        }
+
+        private fun moveToBackup(file: File) {
+            if (!file.exists()) return
+            Files.move(
+                file.toPath(), File(file.parentFile, file.name + ".bak").toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+
+        /** Writes to a temp file in the same directory, then renames over [target]. */
+        private fun writeAtomically(target: File, bytes: ByteArray) {
+            val tmp = File(target.parentFile, target.name + ".tmp")
+            tmp.writeBytes(bytes)
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
 
         private fun generateKeyPair(): Pair<PrivateKey, Certificate> {
@@ -168,7 +271,7 @@ class AdbKeyConnectionManager private constructor(
             val now = System.currentTimeMillis()
             val serial = BigInteger.valueOf(now)
             val notBefore = Date(now)
-            val notAfter = Date(now + 365L * 24 * 60 * 60 * 1000)
+            val notAfter = Date(now + TimeUnit.DAYS.toMillis(CERT_VALIDITY_DAYS))
             val builder = X509v3CertificateBuilder(
                 subject, serial, notBefore, notAfter, subject,
                 org.bouncycastle.asn1.x509.SubjectPublicKeyInfo.getInstance(publicKey.encoded),

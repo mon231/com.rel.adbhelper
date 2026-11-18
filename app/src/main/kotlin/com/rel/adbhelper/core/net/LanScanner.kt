@@ -11,9 +11,8 @@ import java.net.Socket
 
 /**
  * The LAN "auto search": a parallel TCP connect sweep of the device's own /24 subnet for
- * hosts with the adb TCP port (5555) open. mDNS is deliberately not used (plan ruling).
- * `shortcut: only port 5555 is probed — wireless-debugging targets on random ports are
- * found by pairing/manual entry instead — upgrade when mDNS discovery is worth the code.`
+ * hosts with the adb TCP port (5555) open. Wireless-debugging targets on random ports are
+ * found separately by [MdnsDiscovery], which the Connect screen runs alongside this sweep.
  */
 object LanScanner {
 
@@ -21,13 +20,13 @@ object LanScanner {
     const val PARALLELISM = 32
     const val PROBE_TIMEOUT_MS = 250
 
-    /** Every other usable host of the /24 containing [ip] (prefix clamped to 24 — larger
-     * sweeps are 65k+ sockets for marginal benefit). */
-    fun subnetHosts(ip: String, prefix: Int): List<String> {
+    /** Every other usable host of the /24 containing [ip] (always a /24, whatever the real
+     * netmask — larger sweeps are 65k+ sockets for marginal benefit). */
+    fun subnetHosts(ip: String): List<String> {
         val octets = ip.split(".").map { it.toIntOrNull() ?: 0 }
         if (octets.size != 4) return emptyList()
         val base = octets.take(3).joinToString(".")
-        return (1..254).map { "$base.$it" }
+        return (1..254).filter { it != octets[3] }.map { "$base.$it" }
     }
 
     /** "host:port" — the same address format [com.rel.adbhelper.connect.parseHostPort] expects,
@@ -40,8 +39,8 @@ object LanScanner {
      * socket/connection-tracking limits aren't infinite either. */
     private val sweepSemaphore = Semaphore(PARALLELISM)
 
-    suspend fun scan(ip: String, prefix: Int, port: Int = ADB_PORT): List<String> = withContext(Dispatchers.IO) {
-        subnetHosts(ip, prefix)
+    suspend fun scan(ip: String, port: Int = ADB_PORT): List<String> = withContext(Dispatchers.IO) {
+        subnetHosts(ip)
             .map { host ->
                 async { if (sweepSemaphore.withPermit { probe(host, port) }) formatTarget(host, port) else null }
             }

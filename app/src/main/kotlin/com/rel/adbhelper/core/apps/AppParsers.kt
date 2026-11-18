@@ -18,9 +18,6 @@ fun parsePmList(raw: String): List<String> =
         .map { it.removePrefix("package:").trim() }
         .filter { it.isNotBlank() }
 
-/** Third-party/system classification from the two `pm list` outputs. */
-fun classifyApps(all: List<String>, thirdParty: Set<String>): List<AppEntry> =
-    all.map { AppEntry(pkg = it, isSystem = it !in thirdParty, isEnabled = true) }
 
 /**
  * Fragments of `dumpsys package <pkg>`: version/sdk line, install times, and the
