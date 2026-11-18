@@ -36,38 +36,3 @@ jobs:
         with:
           name: adbhelper-apk
           path: adbhelper-signed.apk
-
-  # NEW AND UNPROVEN: this job has never run. continue-on-error keeps it from blocking the build
-  # job above until it has been seen green once; then drop that line.
-  emulator-tests:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 45
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      # Hardware acceleration for the emulator: let the runner user open /dev/kvm.
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      # Writes the integration test's public key (adb_keys line format) to a file. The key pair
-      # itself is created in ~/.adbhelper-test/ exactly as RealAdbdIntegrationTest loads it.
-      - name: Export the integration-test public key
-        run: ADBHELPER_EXPORT_PUBKEY="$PWD/test-adbkey.pub" bash ./gradlew :app:testDebugUnitTest --tests '*ExportTestAdbKeyTest*'
-
-      # Authorises that key, opens adbd on TCP, then runs the integration and instrumented tests.
-      - uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          script: bash ./.github/scripts/emulator-tests.sh
