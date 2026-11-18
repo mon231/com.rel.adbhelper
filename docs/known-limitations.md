@@ -28,7 +28,7 @@ All hand testing used two Android 17 emulators. These were never run on a physic
 - **1c**: one unexplained stall of a large upload on the library transport (a write blocked past the 15 s watchdog). Check whether it is the emulator link or library flow control before touching the timeout.
 - **1d**: over the Own stack button, a command stalled right after leaving Mirror, once. Reconnect hangs were fixed since (10 s handshake bound, reader no longer blocks on a write) but the stall did not recur in 15 rounds and the target was overloaded, so it is not confirmed fixed. Logcat tag `AdbConnection` now reports open streams and the last read time.
 - **1f**: emulator-to-emulator connections drop after large transfers (`connection terminated: read failed`); the app reconnects by itself. Believed to be the emulators' networking; re-check on real devices.
-- Reconnect from the banner does not yet return to the same tab (planned).
+- The "Connection lost" banner has unit tests only; it has not been seen on a screen yet.
 
 ## Screen mirroring (scrcpy)
 

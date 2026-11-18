@@ -45,9 +45,12 @@ Code changes go to Sonnet agents, one worktree each, merged into `dev` by cherry
 Wave 1 (A: CI watch, B: UI tests on the emulator, C: Disconnect and banner) is done.
 
 Wave 2:
-- **D. Reconnect keeps the tab.** Reconnect from the banner returns to the same tab.
-- **E. Re-test 1b/1d.** With the banner in place, repeat Logs/Mirror to Power rounds on the
-  emulators and read `AdbClient` / `AdbConnection` logcat if a drop recurs.
+- **E. Re-test 1b/1d, and see the banner on a screen.** The previous emulator pass was stopped
+  before it ran. On one emulator with its own `adbd` on TCP: walk all tabs (including the
+  `adbTarget` hub-walk UI test; first connect needs Allow), drop `adbd` with `adb tcpip 5555` to
+  show the banner, Reconnect, Disconnect; then repeat Logs/Mirror to Power rounds and read
+  `AdbClient` / `AdbConnection` logcat if a drop recurs. Reconnect already keeps the selected
+  tab (the screen is never left), so no separate work item.
 
 Wave 3 (needs hardware or the owner): section 2 below.
 
@@ -131,8 +134,6 @@ Mirror (works on the emulator: video, touch, Back, Home, server stops on leaving
 
 ## 3. Housekeeping
 
-- [ ] Remove leftover agent worktrees and branches (`.claude/worktrees/agent-*`,
-      `worktree-agent-*`, and the old `adbhelper-scaffold`); all their commits are on `dev`.
 - [ ] When bumping scrcpy: replace the asset, update `core/scrcpy/README.md` (version, URL,
       SHA-256) and re-check the wire formats against that tag; the protocol is version-locked.
 

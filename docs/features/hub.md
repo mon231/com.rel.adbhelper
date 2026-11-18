@@ -19,6 +19,6 @@ Shown after connecting. A header with the target address and a **Disconnect** bu
 
 ## Limits and known issues
 
-- Reconnect from the banner does not yet promise to return you to the same tab (planned, see [Known limitations](../known-limitations.md)).
+- Reconnect keeps you on the tab you were using: the hub is never left, only the banner changes.
 - One unexplained "Connection to the device was lost" was seen once (open bug 1b).
 - The banner logic is verified in unit tests; the banner flow has not been confirmed on real hardware.
