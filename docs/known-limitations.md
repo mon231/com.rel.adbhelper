@@ -43,4 +43,4 @@ All hand testing used two Android 17 emulators. These were never run on a physic
 
 - Monitor is screenshots in a loop, view only.
 - Not built: shell history, file multi-select, APK extract, mirror audio, several device sessions, fastboot.
-- CI cannot drive a physical device; the `emulator-tests` job is `continue-on-error` and not confirmed green. See [Testing](testing.md).
+- CI cannot drive a physical device; the `emulator-tests` job runs only on release tags (`v*`) and is `continue-on-error`. See [Testing](testing.md).

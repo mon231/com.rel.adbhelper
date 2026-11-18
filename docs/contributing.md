@@ -58,12 +58,13 @@ target that does not require authorisation. Nothing automates this yet.
 
 ### CI emulator job
 
-The `emulator-tests` job in `.github/workflows/build.yml` boots an API 34 `google_apis` x86_64
+The `emulator-tests` job in `.github/workflows/release.yml` runs only when a release is drafted
+(a `v*` tag is pushed), never on branch pushes or pull requests. It boots an API 34 `google_apis` x86_64
 emulator (`android-emulator-runner`) and runs `.github/scripts/emulator-tests.sh`: it writes the
 integration-test key as an `adb_keys` line (`ExportTestAdbKeyTest`), uses `adb root` to append it
 to `/data/misc/adb/adb_keys` (no Allow dialog), opens adbd on TCP with `adb tcpip`, forwards it
 to `127.0.0.1:5557`, then runs `RealAdbdIntegrationTest` and `connectedDebugAndroidTest`. The
-`adbTarget` test stays skipped there. The job is `continue-on-error` because it has never run.
+`adbTarget` test stays skipped there. The job is `continue-on-error`: a failure is reported but does not block the release.
 
 ## Building docs locally
 

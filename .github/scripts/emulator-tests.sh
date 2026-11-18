@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs with the emulator already booted (see the emulator-tests job in build.yml).
+# Runs with the emulator already booted (see the emulator-tests job in release.yml, which runs only on v* tags).
 set -euxo pipefail
 
 # google_apis images are userdebug builds, so adbd can run as root. Without root the keys file
