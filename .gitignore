@@ -8,3 +8,6 @@ captures/
 .cxx/
 *.hprof
 .kotlin/
+
+# Local planning notes, never committed
+plan.md
